@@ -14,13 +14,18 @@ import {
 } from './astronomy.ts';
 import { drawPolarSkyPlot, type BodyMarker, type PlotPoint } from './polarPlot.ts';
 import { drawHorizonView, type HorizonBody } from './horizonView.ts';
-import { DayTimeline, MINUTES_PER_DAY } from './timeline.ts';
+import { MINUTES_PER_DAY, RangePlayer } from './timeline.ts';
 
 const SUN_COLOR = '#f5a623';
 const MOON_COLOR = '#b9c4d6';
 const COMPASS_8 = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 const ECLIPSE_CLOSEUP_FOV_DEG = 4;
 const ECLIPSE_SEARCH_DEBOUNCE_MS = 400;
+// Slider units (0-1000) per second; a full first-contact-to-last-contact scrub takes ~20s regardless of the eclipse's real duration.
+const ECLIPSE_PLAY_SPEED = 50;
+const LIVE_TICK_MS = 1000;
+// Matches the CSS transition duration on #sky-plot/#horizon-plot's opacity.
+const DAY_FADE_MS = 180;
 
 const latInput = document.querySelector<HTMLInputElement>('#latitude')!;
 const lonInput = document.querySelector<HTMLInputElement>('#longitude')!;
@@ -43,6 +48,7 @@ const fovSlider = document.querySelector<HTMLInputElement>('#fov-slider')!;
 const fovLabel = document.querySelector<HTMLOutputElement>('#fov-label')!;
 const compassQuickButtons = document.querySelectorAll<HTMLButtonElement>('.compass-quick button');
 
+const liveBtn = document.querySelector<HTMLButtonElement>('#live-btn')!;
 const timeControlsEl = document.querySelector<HTMLDivElement>('#time-controls')!;
 const timeSlider = document.querySelector<HTMLInputElement>('#time-slider')!;
 const timeLabel = document.querySelector<HTMLOutputElement>('#time-label')!;
@@ -54,6 +60,7 @@ const eclipseScrubPanel = document.querySelector<HTMLDivElement>('#eclipse-scrub
 const eclipseScrubTitle = document.querySelector<HTMLElement>('#eclipse-scrub-title')!;
 const eclipseScrubSlider = document.querySelector<HTMLInputElement>('#eclipse-scrub-slider')!;
 const eclipseScrubTime = document.querySelector<HTMLOutputElement>('#eclipse-scrub-time')!;
+const eclipsePlayPauseBtn = document.querySelector<HTMLButtonElement>('#eclipse-play-pause')!;
 const exitEclipseBtn = document.querySelector<HTMLButtonElement>('#exit-eclipse-btn')!;
 
 // Default location so the plot isn't blank before the user picks one.
@@ -61,6 +68,7 @@ const DEFAULT_LOCATION: Location = { latitude: 52.3676, longitude: 4.9041, eleva
 
 type ViewMode = 'polar' | 'horizon';
 let activeView: ViewMode = 'polar';
+let viewBeforeEclipse: ViewMode = 'polar';
 
 // Cached full-day paths; only recomputed when location or date changes, not every animation frame.
 let sunPath: PlotPoint[] = [];
@@ -74,17 +82,26 @@ let currentEclipses: PastAndNextSolarEclipses | null = null;
 let activeEclipse: SolarEclipseInfo | null = null;
 let eclipseSearchTimer: number | undefined;
 
-function todayInputValue(): string {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
+let liveMode = false;
+let liveIntervalId: number | undefined;
+
+function formatDateInput(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
 }
 
+function todayInputValue(): string {
+  return formatDateInput(new Date());
+}
+
+function minutesOfDayFromDate(date: Date): number {
+  return date.getHours() * 60 + date.getMinutes() + date.getSeconds() / 60;
+}
+
 function currentMinutesOfDay(): number {
-  const now = new Date();
-  return now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
+  return minutesOfDayFromDate(new Date());
 }
 
 /** Parses a `YYYY-MM-DD` date-input value as a local calendar date (midnight local time). */
@@ -154,7 +171,23 @@ function recomputeDay(): void {
   sunPath = getSunPathForDay(location, date).map((p) => ({ azimuthDeg: p.azimuth, altitudeDeg: p.altitude }));
   moonPath = getMoonPathForDay(location, date).map((p) => ({ azimuthDeg: p.azimuth, altitudeDeg: p.altitude }));
   renderSunTimes(location, date);
-  renderFrame(timeline.minutesOfDay);
+  renderFrame(timeline.value);
+}
+
+/**
+ * Softens an explicit day switch (date picker, jump-to-now, live midnight
+ * rollover) with a brief cross-fade instead of an instant pixel swap: fades
+ * the active canvas out, swaps the content while invisible, fades it back
+ * in. Not used for accelerated Play's day-rollover, where continuous motion
+ * reads better than a repeated pause.
+ */
+function withDayFade(action: () => void): void {
+  const canvas = activeView === 'polar' ? polarCanvas : horizonCanvas;
+  canvas.classList.add('day-fade');
+  window.setTimeout(() => {
+    action();
+    canvas.classList.remove('day-fade');
+  }, DAY_FADE_MS);
 }
 
 /** Redraws whichever canvases are relevant using the last-computed body positions. Cheap: no astronomy calls. */
@@ -184,6 +217,14 @@ function redrawCanvases(): void {
       fovDeg: Number(fovSlider.value),
       sunAltitudeDeg: lastSunPos.altitude,
       bodies,
+      // Omitted during eclipse close-up: the cached paths are for the day-picker's date, which
+      // is generally a different day than the eclipse being viewed.
+      paths: activeEclipse
+        ? undefined
+        : [
+            { points: sunPath, color: SUN_COLOR },
+            { points: moonPath, color: MOON_COLOR },
+          ],
       centerAltitudeDeg: activeEclipse ? lastSunPos.altitude : undefined,
     });
   }
@@ -209,8 +250,8 @@ function renderFrame(minutesOfDay: number): void {
   timeLabel.textContent = formatMinutesOfDay(minutesOfDay);
 }
 
-function setView(view: ViewMode): void {
-  if (view === 'polar' && activeEclipse) exitEclipseMode();
+/** Applies a view without touching eclipse state — used internally by eclipse enter/exit. */
+function applyView(view: ViewMode): void {
   activeView = view;
   polarWrap.hidden = view !== 'polar';
   horizonWrap.hidden = view !== 'horizon';
@@ -219,14 +260,74 @@ function setView(view: ViewMode): void {
   redrawCanvases();
 }
 
-const timeline = new DayTimeline({
-  initialMinutes: currentMinutesOfDay(),
-  speedMinutesPerSecond: Number(speedSelect.value),
+/** User-facing view switch: leaves eclipse mode first if it's active. */
+function setView(view: ViewMode): void {
+  if (activeEclipse) clearEclipseUI();
+  applyView(view);
+}
+
+/** Advances the date picker to the next calendar day and keeps playing from the overflow remainder. */
+function advanceDayAndContinue(overflowMinutes: number): number {
+  const next = new Date(selectedDate());
+  next.setDate(next.getDate() + 1);
+  dateInput.value = formatDateInput(next);
+  recomputeDay();
+  return overflowMinutes;
+}
+
+const timeline = new RangePlayer({
+  max: MINUTES_PER_DAY,
+  initialValue: currentMinutesOfDay(),
+  speedPerSecond: Number(speedSelect.value),
   onTick: renderFrame,
+  onOverflow: advanceDayAndContinue,
   onPlayingChange: (playing) => {
     playPauseBtn.textContent = playing ? '⏸ Pause' : '▶ Play';
     playPauseBtn.setAttribute('aria-pressed', String(playing));
   },
+});
+
+// --- Live mode --------------------------------------------------------
+
+function setLiveButtonState(active: boolean): void {
+  liveBtn.setAttribute('aria-pressed', String(active));
+}
+
+/** Keeps the day/time in sync with the real clock, rolling over to the next calendar day at midnight. */
+function liveTick(): void {
+  const nowStr = todayInputValue();
+  if (dateInput.value !== nowStr) {
+    withDayFade(() => {
+      dateInput.value = nowStr;
+      timeline.setValue(currentMinutesOfDay());
+      recomputeDay();
+    });
+  } else {
+    timeline.setValue(currentMinutesOfDay());
+  }
+}
+
+function startLiveMode(): void {
+  liveMode = true;
+  setLiveButtonState(true);
+  timeline.pause();
+  dateInput.value = todayInputValue();
+  timeline.setValue(currentMinutesOfDay());
+  recomputeDay();
+  window.clearInterval(liveIntervalId);
+  liveIntervalId = window.setInterval(liveTick, LIVE_TICK_MS);
+}
+
+function stopLiveMode(): void {
+  if (!liveMode) return;
+  liveMode = false;
+  setLiveButtonState(false);
+  window.clearInterval(liveIntervalId);
+}
+
+liveBtn.addEventListener('click', () => {
+  if (liveMode) stopLiveMode();
+  else startLiveMode();
 });
 
 // --- Eclipses -----------------------------------------------------------
@@ -236,13 +337,21 @@ function capitalize(word: string): string {
 }
 
 function formatEclipseTime(date: Date): string {
-  return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return date.toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function formatEclipseDate(date: Date): string {
+  return date.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function formatEclipseClockTime(date: Date): string {
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 function eclipseContactRow(label: string, event: SolarEclipseEvent | null): string {
   if (!event) return '';
   const belowClass = event.sunAltitude < 0 ? ' class="below-horizon"' : '';
-  return `<dt>${label}</dt><dd${belowClass}>${formatEclipseTime(event.time)}</dd>`;
+  return `<dt>${label}</dt><dd${belowClass}><span class="ec-date">${formatEclipseDate(event.time)}</span><span class="ec-time">${formatEclipseClockTime(event.time)}</span></dd>`;
 }
 
 function eclipseCardHtml(eclipse: SolarEclipseInfo, title: string, which: 'past' | 'next'): string {
@@ -258,7 +367,10 @@ function eclipseCardHtml(eclipse: SolarEclipseInfo, title: string, which: 'past'
         ${eclipse.totalEnd ? eclipseContactRow(`${ringOrTotality} ends`, eclipse.totalEnd) : ''}
         ${eclipseContactRow('Last contact', eclipse.partialEnd)}
       </dl>
-      <button type="button" class="eclipse-view-btn" data-which="${which}">🔭 View in horizon</button>
+      <div class="eclipse-actions">
+        <button type="button" class="eclipse-timeline-btn" data-which="${which}">🕐 Open in timeline</button>
+        <button type="button" class="eclipse-view-btn" data-which="${which}">🔭 View in horizon</button>
+      </div>
     </div>
   `;
 }
@@ -309,6 +421,7 @@ function renderEclipseFrame(fraction: number): void {
   redrawCanvases();
   eclipseScrubTime.textContent = time.toLocaleString([], {
     weekday: 'short',
+    year: 'numeric',
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
@@ -316,44 +429,97 @@ function renderEclipseFrame(fraction: number): void {
   });
 }
 
+const eclipsePlayer = new RangePlayer({
+  max: 1000,
+  initialValue: 0,
+  speedPerSecond: ECLIPSE_PLAY_SPEED,
+  onTick: (value) => {
+    eclipseScrubSlider.value = String(value);
+    renderEclipseFrame(value / 1000);
+  },
+  onPlayingChange: (playing) => {
+    eclipsePlayPauseBtn.textContent = playing ? '⏸ Pause' : '▶ Play';
+    eclipsePlayPauseBtn.setAttribute('aria-pressed', String(playing));
+  },
+});
+
+/** Resets eclipse-mode UI/state without touching which view is showing — used by both exit and view-switch paths. */
+function clearEclipseUI(): void {
+  activeEclipse = null;
+  headingSetByUser = false;
+  timeControlsEl.hidden = false;
+  eclipseScrubPanel.hidden = true;
+  eclipsePlayer.pause();
+  fovSlider.value = '90';
+  fovLabel.textContent = '90°';
+}
+
 function enterEclipseMode(which: 'past' | 'next'): void {
   const eclipse = which === 'next' ? currentEclipses?.next : currentEclipses?.past;
   if (!eclipse) return;
 
+  stopLiveMode();
   timeline.pause();
+  if (!activeEclipse) viewBeforeEclipse = activeView;
   activeEclipse = eclipse;
   headingSetByUser = false;
   fovSlider.value = String(ECLIPSE_CLOSEUP_FOV_DEG);
   fovLabel.textContent = `${ECLIPSE_CLOSEUP_FOV_DEG}°`;
 
   eclipseScrubTitle.textContent = `${capitalize(eclipse.kind)} eclipse — ${formatEclipseTime(eclipse.peak.time)}`;
-  eclipseScrubSlider.value = '0';
 
   timeControlsEl.hidden = true;
   eclipseScrubPanel.hidden = false;
-  setView('horizon');
-  renderEclipseFrame(0);
+  applyView('horizon');
+  eclipsePlayer.pause();
+  eclipsePlayer.setValue(0);
 }
 
 function exitEclipseMode(): void {
-  activeEclipse = null;
-  headingSetByUser = false;
-  timeControlsEl.hidden = false;
-  eclipseScrubPanel.hidden = true;
-  fovSlider.value = '90';
-  fovLabel.textContent = '90°';
-  renderFrame(timeline.minutesOfDay);
+  clearEclipseUI();
+  applyView(viewBeforeEclipse);
+}
+
+/** Jumps the normal day timeline to an eclipse's peak, in whichever view is currently active — no close-up scrubber. */
+function openEclipseInTimeline(which: 'past' | 'next'): void {
+  const eclipse = which === 'next' ? currentEclipses?.next : currentEclipses?.past;
+  if (!eclipse) return;
+
+  if (activeEclipse) {
+    clearEclipseUI();
+    applyView(viewBeforeEclipse);
+  }
+  stopLiveMode();
+  timeline.pause();
+  withDayFade(() => {
+    dateInput.value = formatDateInput(eclipse.peak.time);
+    timeline.setValue(minutesOfDayFromDate(eclipse.peak.time));
+    recomputeDay();
+  });
 }
 
 eclipseContentEl.addEventListener('click', (e) => {
-  const button = (e.target as HTMLElement).closest<HTMLButtonElement>('.eclipse-view-btn');
-  if (!button) return;
-  enterEclipseMode(button.dataset.which === 'past' ? 'past' : 'next');
+  const target = e.target as HTMLElement;
+  const which = (btn: HTMLButtonElement) => (btn.dataset.which === 'past' ? 'past' : 'next');
+
+  const horizonBtn = target.closest<HTMLButtonElement>('.eclipse-view-btn');
+  if (horizonBtn) {
+    enterEclipseMode(which(horizonBtn));
+    return;
+  }
+
+  const timelineBtn = target.closest<HTMLButtonElement>('.eclipse-timeline-btn');
+  if (timelineBtn) {
+    openEclipseInTimeline(which(timelineBtn));
+  }
 });
 
 eclipseScrubSlider.addEventListener('input', () => {
-  renderEclipseFrame(Number(eclipseScrubSlider.value) / 1000);
+  eclipsePlayer.pause();
+  eclipsePlayer.setValue(Number(eclipseScrubSlider.value));
 });
+
+eclipsePlayPauseBtn.addEventListener('click', () => eclipsePlayer.toggle());
 
 exitEclipseBtn.addEventListener('click', exitEclipseMode);
 
@@ -386,7 +552,10 @@ dateInput.value = todayInputValue();
 timeSlider.max = String(MINUTES_PER_DAY - 1);
 
 useLocationBtn.addEventListener('click', useMyLocation);
-dateInput.addEventListener('input', recomputeDay);
+dateInput.addEventListener('input', () => {
+  stopLiveMode();
+  withDayFade(recomputeDay);
+});
 [latInput, lonInput].forEach((el) =>
   el.addEventListener('input', () => {
     recomputeDay();
@@ -396,19 +565,29 @@ dateInput.addEventListener('input', recomputeDay);
 window.addEventListener('resize', redrawCanvases);
 
 timeSlider.addEventListener('input', () => {
+  stopLiveMode();
   timeline.pause();
-  timeline.setMinutes(Number(timeSlider.value));
+  timeline.setValue(Number(timeSlider.value));
 });
 
-playPauseBtn.addEventListener('click', () => timeline.toggle());
+playPauseBtn.addEventListener('click', () => {
+  stopLiveMode();
+  timeline.toggle();
+});
 
 speedSelect.addEventListener('change', () => timeline.setSpeed(Number(speedSelect.value)));
 
 jumpNowBtn.addEventListener('click', () => {
   timeline.pause();
-  dateInput.value = todayInputValue();
-  timeline.setMinutes(currentMinutesOfDay());
-  recomputeDay();
+  const nowStr = todayInputValue();
+  const dateChanging = dateInput.value !== nowStr;
+  const applyNow = () => {
+    dateInput.value = nowStr;
+    timeline.setValue(currentMinutesOfDay());
+    recomputeDay();
+  };
+  if (dateChanging) withDayFade(applyNow);
+  else applyNow();
 });
 
 viewPolarBtn.addEventListener('click', () => setView('polar'));
@@ -434,5 +613,5 @@ compassQuickButtons.forEach((btn) => {
   });
 });
 
-recomputeDay();
+startLiveMode();
 recomputeEclipses();

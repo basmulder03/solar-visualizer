@@ -31,6 +31,7 @@
       <p id="location-status" class="status" role="status"></p>
 
       <div id="time-controls" class="panel time-panel">
+        <button id="live-btn" type="button" aria-pressed="true" class="live-btn">🔴 Live</button>
         <button id="play-pause" type="button" aria-pressed="false">▶ Play</button>
         <input id="time-slider" type="range" min="0" max="1439" step="1" value="0" aria-label="Time of day" />
         <output id="time-label" for="time-slider" class="time-label">00:00</output>
@@ -52,7 +53,10 @@
           <strong id="eclipse-scrub-title">Eclipse</strong>
           <button id="exit-eclipse-btn" type="button">✕ Exit eclipse view</button>
         </div>
-        <input id="eclipse-scrub-slider" type="range" min="0" max="1000" step="1" value="0" aria-label="Eclipse timeline" />
+        <div class="eclipse-scrub-row">
+          <button id="eclipse-play-pause" type="button" aria-pressed="false">▶ Play</button>
+          <input id="eclipse-scrub-slider" type="range" min="0" max="1000" step="1" value="0" aria-label="Eclipse timeline" />
+        </div>
         <div class="eclipse-scrub-labels">
           <span>First contact</span>
           <span>Maximum</span>

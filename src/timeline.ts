@@ -1,51 +1,64 @@
 /**
- * Drives a "minutes since midnight" playhead for a single calendar day:
- * scrubbing, play/pause animation via requestAnimationFrame, and speed
- * control. Knows nothing about astronomy or the DOM beyond rAF, so the
- * polar plot and (later) horizon view can share one time source.
+ * Drives a bounded [0, max] playhead: scrubbing, play/pause animation via
+ * requestAnimationFrame, and speed control. Knows nothing about astronomy or
+ * the DOM beyond rAF, so it can back both the day slider (max = one day in
+ * minutes) and the eclipse scrubber (max = 1000, an arbitrary 0-1 fraction
+ * scale) with the same engine.
  */
 
 export const MINUTES_PER_DAY = 24 * 60;
 
-export interface DayTimelineOptions {
-  initialMinutes?: number;
-  speedMinutesPerSecond?: number;
-  onTick: (minutesOfDay: number) => void;
+export interface RangePlayerOptions {
+  max: number;
+  initialValue?: number;
+  speedPerSecond?: number;
+  onTick: (value: number) => void;
   onPlayingChange?: (playing: boolean) => void;
+  /**
+   * If provided, called instead of pausing when playback would exceed `max`,
+   * with the overflow amount past `max`. Playback continues from the
+   * returned value (e.g. the day timeline uses this to roll into the next
+   * calendar day and keep playing). Omit to just clamp-and-pause at `max`.
+   */
+  onOverflow?: (overflow: number) => number;
 }
 
-export class DayTimeline {
-  minutesOfDay: number;
-  private speedMinutesPerSecond: number;
+export class RangePlayer {
+  value: number;
+  private readonly max: number;
+  private speedPerSecond: number;
   private playing = false;
   private rafId: number | null = null;
   private lastTimestamp: number | null = null;
-  private readonly onTick: (minutesOfDay: number) => void;
+  private readonly onTick: (value: number) => void;
   private readonly onPlayingChange: (playing: boolean) => void;
+  private readonly onOverflow?: (overflow: number) => number;
 
-  constructor(options: DayTimelineOptions) {
-    this.minutesOfDay = options.initialMinutes ?? 0;
-    this.speedMinutesPerSecond = options.speedMinutesPerSecond ?? 15;
+  constructor(options: RangePlayerOptions) {
+    this.max = options.max;
+    this.value = options.initialValue ?? 0;
+    this.speedPerSecond = options.speedPerSecond ?? 15;
     this.onTick = options.onTick;
     this.onPlayingChange = options.onPlayingChange ?? (() => {});
+    this.onOverflow = options.onOverflow;
   }
 
   get isPlaying(): boolean {
     return this.playing;
   }
 
-  setMinutes(minutes: number): void {
-    this.minutesOfDay = Math.min(Math.max(minutes, 0), MINUTES_PER_DAY);
-    this.onTick(this.minutesOfDay);
+  setValue(value: number): void {
+    this.value = Math.min(Math.max(value, 0), this.max);
+    this.onTick(this.value);
   }
 
-  setSpeed(minutesPerSecond: number): void {
-    this.speedMinutesPerSecond = minutesPerSecond;
+  setSpeed(perSecond: number): void {
+    this.speedPerSecond = perSecond;
   }
 
   play(): void {
     if (this.playing) return;
-    if (this.minutesOfDay >= MINUTES_PER_DAY) this.setMinutes(0);
+    if (this.value >= this.max) this.setValue(0);
     this.playing = true;
     this.lastTimestamp = null;
     this.onPlayingChange(true);
@@ -69,13 +82,18 @@ export class DayTimeline {
     if (!this.playing) return;
     if (this.lastTimestamp !== null) {
       const dtSeconds = (timestamp - this.lastTimestamp) / 1000;
-      const next = this.minutesOfDay + dtSeconds * this.speedMinutesPerSecond;
-      if (next >= MINUTES_PER_DAY) {
-        this.setMinutes(MINUTES_PER_DAY);
-        this.pause();
-        return;
+      const next = this.value + dtSeconds * this.speedPerSecond;
+      if (next >= this.max) {
+        if (this.onOverflow) {
+          this.setValue(this.onOverflow(next - this.max));
+        } else {
+          this.setValue(this.max);
+          this.pause();
+          return;
+        }
+      } else {
+        this.setValue(next);
       }
-      this.setMinutes(next);
     }
     this.lastTimestamp = timestamp;
     this.rafId = requestAnimationFrame(this.tick);

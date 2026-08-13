@@ -6,6 +6,8 @@
  * the DOM beyond the canvas it's given.
  */
 
+import { getCanvasCssSize } from './canvasSize.ts';
+
 export interface HorizonBody {
   azimuthDeg: number;
   altitudeDeg: number;
@@ -13,6 +15,17 @@ export interface HorizonBody {
   angularRadiusDeg: number;
   color: string;
   label: string;
+}
+
+export interface HorizonPathPoint {
+  azimuthDeg: number;
+  altitudeDeg: number;
+}
+
+export interface HorizonPathSeries {
+  /** Full-day path, sampled at regular intervals — only the portion within the current FOV is drawn. */
+  points: HorizonPathPoint[];
+  color: string;
 }
 
 export interface HorizonViewOptions {
@@ -23,6 +36,8 @@ export interface HorizonViewOptions {
   /** Drives the sky tint (day/twilight/night). */
   sunAltitudeDeg: number;
   bodies: HorizonBody[];
+  /** Faint reference lines tracing each body's path through the sky (e.g. the day's full arc). */
+  paths?: HorizonPathSeries[];
   /**
    * Altitude (degrees) to vertically center the frame on, placed at mid-height.
    * Omit for the default horizon-relative framing (horizon line at a fixed
@@ -50,6 +65,7 @@ const LABEL_COLOR = 'rgba(255, 255, 255, 0.75)';
 const GROUND_SCRIM = 'rgba(8, 9, 13, 0.55)';
 const MIN_DISC_RADIUS_PX = 6;
 const HORIZON_Y_FRACTION = 0.7;
+const PATH_ALPHA = 0.35;
 
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
@@ -92,10 +108,28 @@ const CARDINALS: Record<number, string> = {
   0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SW', 270: 'W', 315: 'NW',
 };
 
+/** Splits a path into contiguous runs that fall within the current FOV window, so off-screen stretches don't draw connecting lines across the whole sky. */
+function segmentsWithinFov(points: HorizonPathPoint[], headingDeg: number, halfFovDeg: number): HorizonPathPoint[][] {
+  const segments: HorizonPathPoint[][] = [];
+  let current: HorizonPathPoint[] = [];
+  for (const point of points) {
+    const offset = azimuthOffset(point.azimuthDeg, headingDeg);
+    if (offset >= -halfFovDeg && offset <= halfFovDeg) {
+      current.push(point);
+    } else if (current.length > 0) {
+      segments.push(current);
+      current = [];
+    }
+  }
+  if (current.length > 0) segments.push(current);
+  return segments;
+}
+
 export function drawHorizonView(canvas: HTMLCanvasElement, options: HorizonViewOptions): void {
   const dpr = window.devicePixelRatio || 1;
-  const cssWidth = Math.max(canvas.clientWidth, 1);
-  const cssHeight = Math.max(canvas.clientHeight, 1);
+  const cssSize = getCanvasCssSize(canvas);
+  const cssWidth = cssSize.width;
+  const cssHeight = cssSize.height;
   if (canvas.width !== cssWidth * dpr || canvas.height !== cssHeight * dpr) {
     canvas.width = cssWidth * dpr;
     canvas.height = cssHeight * dpr;
@@ -106,6 +140,7 @@ export function drawHorizonView(canvas: HTMLCanvasElement, options: HorizonViewO
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   const pxPerDeg = cssWidth / options.fovDeg;
+  const halfFov = options.fovDeg / 2;
   // Normally the frame is anchored to the horizon line near the bottom; when centering on a
   // given altitude (e.g. a high-altitude eclipse close-up) it's anchored at mid-height instead.
   const anchorAltitudeDeg = options.centerAltitudeDeg ?? 0;
@@ -146,9 +181,27 @@ export function drawHorizonView(canvas: HTMLCanvasElement, options: HorizonViewO
     }
   }
 
+  // Faint path lines tracing each body's route through the sky, clipped to the current FOV.
+  ctx.lineWidth = 1;
+  for (const series of options.paths ?? []) {
+    for (const segment of segmentsWithinFov(series.points, options.headingDeg, halfFov)) {
+      if (segment.length < 2) continue;
+      ctx.beginPath();
+      segment.forEach((point, i) => {
+        const x = cssWidth / 2 + azimuthOffset(point.azimuthDeg, options.headingDeg) * pxPerDeg;
+        const y = altitudeToY(point.altitudeDeg);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.strokeStyle = series.color;
+      ctx.globalAlpha = PATH_ALPHA;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  }
+
   // Compass ticks every 15 degrees, cardinal/intercardinal directions emphasized.
   ctx.textAlign = 'center';
-  const halfFov = options.fovDeg / 2;
   const startAz = Math.ceil((options.headingDeg - halfFov) / 15) * 15;
   for (let az = startAz; az <= options.headingDeg + halfFov; az += 15) {
     const norm = ((az % 360) + 360) % 360;

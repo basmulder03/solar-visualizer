@@ -6,6 +6,8 @@
  * it stays independently testable/reusable from the data layer.
  */
 
+import { getCanvasCssSize } from './canvasSize.ts';
+
 export interface PlotPoint {
   azimuthDeg: number;
   altitudeDeg: number;
@@ -84,7 +86,7 @@ function aboveHorizonSegments(path: PlotPoint[]): PlotPoint[][] {
 
 export function drawPolarSkyPlot(canvas: HTMLCanvasElement, options: PolarPlotOptions): void {
   const dpr = window.devicePixelRatio || 1;
-  const cssSize = Math.max(canvas.clientWidth, 1);
+  const cssSize = Math.max(getCanvasCssSize(canvas).width, 1);
   if (canvas.width !== cssSize * dpr || canvas.height !== cssSize * dpr) {
     canvas.width = cssSize * dpr;
     canvas.height = cssSize * dpr;
@@ -98,7 +100,7 @@ export function drawPolarSkyPlot(canvas: HTMLCanvasElement, options: PolarPlotOp
   const padding = 28;
   const cx = cssSize / 2;
   const cy = cssSize / 2;
-  const outerRadius = cssSize / 2 - padding;
+  const outerRadius = Math.max(cssSize / 2 - padding, 1);
   const horizonRadius = radiusFraction(0) * outerRadius;
 
   // Below-horizon ring background.

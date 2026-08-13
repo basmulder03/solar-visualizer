@@ -160,6 +160,29 @@ button:hover {
   color: var(--text-h);
 }
 
+.live-btn {
+  flex-shrink: 0;
+  opacity: 0.5;
+}
+
+.live-btn[aria-pressed='true'] {
+  opacity: 1;
+  border-color: #e5484d;
+  background: rgba(229, 72, 77, 0.14);
+  color: var(--text-h);
+  animation: live-pulse 2s ease-in-out infinite;
+}
+
+@keyframes live-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(229, 72, 77, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(229, 72, 77, 0);
+  }
+}
+
 @media (max-width: 640px) {
   .time-panel {
     flex-wrap: wrap;
@@ -209,6 +232,16 @@ button:hover {
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 16px;
+}
+
+#sky-plot,
+#horizon-plot {
+  transition: opacity 180ms ease;
+}
+
+#sky-plot.day-fade,
+#horizon-plot.day-fade {
+  opacity: 0.2;
 }
 
 #sky-plot {
@@ -303,7 +336,8 @@ button:hover {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  min-width: 220px;
+  width: 260px;
+  flex-shrink: 0;
 }
 
 .info-panel {
@@ -311,7 +345,7 @@ button:hover {
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 16px 20px;
-  min-width: 220px;
+  min-width: 0;
 }
 
 .info-panel h2 {
@@ -335,6 +369,7 @@ button:hover {
   margin: 0;
   font-family: var(--mono);
   text-align: right;
+  white-space: nowrap;
   color: var(--text-h);
 }
 
@@ -380,29 +415,52 @@ button:hover {
   font-size: 13px;
   display: grid;
   grid-template-columns: auto auto;
-  gap: 4px 12px;
+  align-items: start;
+  gap: 6px 12px;
 }
 
 .eclipse-contacts dt {
   color: var(--text-dim);
+  padding-top: 1px;
 }
 
 .eclipse-contacts dd {
   margin: 0;
-  font-family: var(--mono);
-  text-align: right;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
   color: var(--text-h);
 }
 
-.eclipse-contacts dd.below-horizon::after {
-  content: ' (below horizon)';
-  font-family: var(--sans);
-  color: var(--text-dim);
+.eclipse-contacts .ec-date {
   font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
 }
 
+.eclipse-contacts .ec-time {
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+
+.eclipse-contacts dd.below-horizon::after {
+  content: 'below horizon';
+  color: var(--text-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.eclipse-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.eclipse-timeline-btn,
 .eclipse-view-btn {
   width: 100%;
+  font-size: 13px;
 }
 
 .eclipse-scrub {
@@ -423,8 +481,15 @@ button:hover {
   color: var(--text-h);
 }
 
-.eclipse-scrub #eclipse-scrub-slider {
-  width: 100%;
+.eclipse-scrub-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.eclipse-scrub-row #eclipse-scrub-slider {
+  flex: 1 1 auto;
+  min-width: 0;
   accent-color: var(--accent);
 }
 
