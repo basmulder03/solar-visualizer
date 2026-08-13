@@ -237,6 +237,13 @@ button:hover {
 #sky-plot,
 #horizon-plot {
   transition: opacity 180ms ease;
+  touch-action: none;
+  cursor: grab;
+}
+
+#sky-plot:active,
+#horizon-plot:active {
+  cursor: grabbing;
 }
 
 #sky-plot.day-fade,
@@ -260,6 +267,32 @@ button:hover {
   height: min(340px, 60vw);
   display: block;
   border-radius: 8px;
+}
+
+.auto-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.auto-toggle-btn {
+  font-size: 13px;
+  padding: 7px 12px;
+  background: transparent;
+}
+
+.auto-toggle-btn[aria-pressed='true'] {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--text-h);
+}
+
+.interaction-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--text-dim);
+  text-align: center;
 }
 
 .horizon-controls {

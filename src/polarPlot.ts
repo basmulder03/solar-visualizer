@@ -28,7 +28,17 @@ export interface PolarPlotOptions {
   paths: PathSeries[];
   /** Current/selected marker positions, drawn on top of the paths. */
   markers?: BodyMarker[];
+  /** Zoom scale (>=1, default 1), applied uniformly around the plot's center. */
+  zoom?: number;
+  /** Pan offset in canvas CSS pixels, applied after zooming. Ignored if `followTarget` is set. */
+  panX?: number;
+  panY?: number;
+  /** When set (and zoom > 1), pan is computed each frame to keep this azimuth/altitude centered. */
+  followTarget?: PlotPoint;
 }
+
+/** Gap (canvas CSS px) between the plot's outer edge and the canvas edge, for cardinal labels. Exported so callers can reproduce the plot's cx/cy/outerRadius for zoom-around-point math. */
+export const POLAR_PLOT_PADDING_PX = 28;
 
 const BELOW_HORIZON_FLOOR_DEG = -30;
 const HORIZON_COLOR = '#8a93a6';
@@ -97,11 +107,27 @@ export function drawPolarSkyPlot(canvas: HTMLCanvasElement, options: PolarPlotOp
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cssSize, cssSize);
 
-  const padding = 28;
+  const padding = POLAR_PLOT_PADDING_PX;
   const cx = cssSize / 2;
   const cy = cssSize / 2;
   const outerRadius = Math.max(cssSize / 2 - padding, 1);
   const horizonRadius = radiusFraction(0) * outerRadius;
+
+  const zoom = Math.max(options.zoom ?? 1, 1);
+  let panX = options.panX ?? 0;
+  let panY = options.panY ?? 0;
+  if (options.followTarget && zoom > 1) {
+    const [fx, fy] = toXY(cx, cy, outerRadius, options.followTarget);
+    panX = -(fx - cx) * zoom;
+    panY = -(fy - cy) * zoom;
+  }
+  // Pan in screen pixels, then zoom uniformly around the plot's center — every draw call below
+  // is unchanged and just rides along on this transform.
+  ctx.save();
+  ctx.translate(panX, panY);
+  ctx.translate(cx, cy);
+  ctx.scale(zoom, zoom);
+  ctx.translate(-cx, -cy);
 
   // Below-horizon ring background.
   ctx.beginPath();
@@ -184,4 +210,6 @@ export function drawPolarSkyPlot(canvas: HTMLCanvasElement, options: PolarPlotOp
     ctx.font = '11px system-ui, sans-serif';
     ctx.fillText(marker.label, x, y - 14);
   }
+
+  ctx.restore();
 }

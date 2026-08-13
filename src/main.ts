@@ -12,9 +12,11 @@ import {
   type SolarEclipseEvent,
   type SolarEclipseInfo,
 } from './astronomy.ts';
-import { drawPolarSkyPlot, type BodyMarker, type PlotPoint } from './polarPlot.ts';
+import { drawPolarSkyPlot, POLAR_PLOT_PADDING_PX, type BodyMarker, type PlotPoint } from './polarPlot.ts';
 import { drawHorizonView, type HorizonBody } from './horizonView.ts';
 import { MINUTES_PER_DAY, RangePlayer } from './timeline.ts';
+import { getCanvasCssSize } from './canvasSize.ts';
+import { attachViewportInteraction } from './viewportInteraction.ts';
 
 const SUN_COLOR = '#f5a623';
 const MOON_COLOR = '#b9c4d6';
@@ -26,6 +28,14 @@ const ECLIPSE_PLAY_SPEED = 50;
 const LIVE_TICK_MS = 1000;
 // Matches the CSS transition duration on #sky-plot/#horizon-plot's opacity.
 const DAY_FADE_MS = 180;
+const POLAR_MAX_ZOOM = 10;
+// Auto-zoom: polarZoom = numerator / max(separationDeg, floor) — tight zoom when Sun/Moon are close (e.g. an eclipse), 1x once they're far apart.
+const POLAR_AUTOZOOM_NUMERATOR = 40;
+const POLAR_AUTOZOOM_SEPARATION_FLOOR = 4;
+// Auto-zoom: fov = separationDeg * factor, clamped — same idea, but for the horizon view's field of view.
+const HORIZON_AUTOZOOM_FACTOR = 4;
+const HORIZON_AUTOZOOM_MIN_FOV = 4;
+const HORIZON_AUTOZOOM_MAX_FOV = 100;
 
 const latInput = document.querySelector<HTMLInputElement>('#latitude')!;
 const lonInput = document.querySelector<HTMLInputElement>('#longitude')!;
@@ -47,6 +57,12 @@ const headingLabel = document.querySelector<HTMLOutputElement>('#heading-label')
 const fovSlider = document.querySelector<HTMLInputElement>('#fov-slider')!;
 const fovLabel = document.querySelector<HTMLOutputElement>('#fov-label')!;
 const compassQuickButtons = document.querySelectorAll<HTMLButtonElement>('.compass-quick button');
+const horizonAutoFollowBtn = document.querySelector<HTMLButtonElement>('#horizon-autofollow-btn')!;
+const horizonAutoZoomBtn = document.querySelector<HTMLButtonElement>('#horizon-autozoom-btn')!;
+
+const polarAutoFollowBtn = document.querySelector<HTMLButtonElement>('#polar-autofollow-btn')!;
+const polarAutoZoomBtn = document.querySelector<HTMLButtonElement>('#polar-autozoom-btn')!;
+const polarResetBtn = document.querySelector<HTMLButtonElement>('#polar-reset-btn')!;
 
 const liveBtn = document.querySelector<HTMLButtonElement>('#live-btn')!;
 const timeControlsEl = document.querySelector<HTMLDivElement>('#time-controls')!;
@@ -76,7 +92,19 @@ let moonPath: PlotPoint[] = [];
 // Cached instantaneous positions; recomputed once per time tick, reused when heading/FOV change.
 let lastSunPos: BodyPosition | null = null;
 let lastMoonPos: BodyPosition | null = null;
-let headingSetByUser = false;
+
+// Horizon view: heading auto-tracks the Sun and/or FOV auto-adapts to the Sun-Moon separation,
+// each independently toggleable; either is disabled the instant the user manually drags/scrolls.
+let horizonAutoFollow = true;
+let horizonAutoZoom = false;
+
+// Polar view: real zoom/pan (applied as a canvas transform), plus the same auto-follow/auto-zoom
+// concepts — auto-follow keeps the Sun centered, auto-zoom scales in as the Sun/Moon get close.
+let polarZoom = 1;
+let polarPanX = 0;
+let polarPanY = 0;
+let polarAutoFollow = false;
+let polarAutoZoom = false;
 
 let currentEclipses: PastAndNextSolarEclipses | null = null;
 let activeEclipse: SolarEclipseInfo | null = null;
@@ -129,6 +157,23 @@ function formatMinutesOfDay(minutesOfDay: number): string {
 function headingLabelText(deg: number): string {
   const compass = COMPASS_8[Math.round(deg / 45) % 8];
   return `${compass} (${deg}°)`;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function normalizeAzimuth(deg: number): number {
+  return ((deg % 360) + 360) % 360;
+}
+
+/** Apparent angular separation between two az/alt positions, in degrees (small-angle approximation — plenty accurate for driving a zoom level). */
+function angularSeparationDeg(a: { azimuth: number; altitude: number }, b: { azimuth: number; altitude: number }): number {
+  const avgAltRad = (((a.altitude + b.altitude) / 2) * Math.PI) / 180;
+  const azDelta = (((b.azimuth - a.azimuth + 540) % 360) + 360) % 360 - 180;
+  const dx = azDelta * Math.cos(avgAltRad);
+  const dy = b.altitude - a.altitude;
+  return Math.hypot(dx, dy);
 }
 
 function currentLocation(): Location | null {
@@ -190,9 +235,40 @@ function withDayFade(action: () => void): void {
   }, DAY_FADE_MS);
 }
 
-/** Redraws whichever canvases are relevant using the last-computed body positions. Cheap: no astronomy calls. */
+function setHorizonAutoFollow(enabled: boolean): void {
+  horizonAutoFollow = enabled;
+  horizonAutoFollowBtn.setAttribute('aria-pressed', String(enabled));
+}
+
+function setHorizonAutoZoom(enabled: boolean): void {
+  horizonAutoZoom = enabled;
+  horizonAutoZoomBtn.setAttribute('aria-pressed', String(enabled));
+}
+
+function setPolarAutoFollow(enabled: boolean): void {
+  polarAutoFollow = enabled;
+  polarAutoFollowBtn.setAttribute('aria-pressed', String(enabled));
+}
+
+function setPolarAutoZoom(enabled: boolean): void {
+  polarAutoZoom = enabled;
+  polarAutoZoomBtn.setAttribute('aria-pressed', String(enabled));
+}
+
+/**
+ * Redraws whichever canvases are relevant using the last-computed body
+ * positions. Cheap: no astronomy calls. Also where auto-follow/auto-zoom
+ * are realized: both are just "recompute heading/FOV/zoom from the current
+ * Sun(-Moon) position(s) every redraw," so centralizing it here means every
+ * caller (time ticks, view switches, resizes, toggle clicks) gets it for free.
+ */
 function redrawCanvases(): void {
   if (!lastSunPos || !lastMoonPos) return;
+
+  if (horizonAutoFollow) {
+    headingSlider.value = String(Math.round(lastSunPos.azimuth));
+    headingLabel.textContent = headingLabelText(Number(headingSlider.value));
+  }
 
   const markers: BodyMarker[] = [
     { azimuthDeg: lastSunPos.azimuth, altitudeDeg: lastSunPos.altitude, color: SUN_COLOR, label: 'Sun' },
@@ -200,14 +276,28 @@ function redrawCanvases(): void {
   ];
 
   if (activeView === 'polar') {
+    if (polarAutoZoom) {
+      const separation = angularSeparationDeg(lastSunPos, lastMoonPos);
+      polarZoom = clamp(POLAR_AUTOZOOM_NUMERATOR / Math.max(separation, POLAR_AUTOZOOM_SEPARATION_FLOOR), 1, POLAR_MAX_ZOOM);
+    }
     drawPolarSkyPlot(polarCanvas, {
       paths: [
         { points: sunPath, color: SUN_COLOR },
         { points: moonPath, color: MOON_COLOR },
       ],
       markers,
+      zoom: polarZoom,
+      panX: polarPanX,
+      panY: polarPanY,
+      followTarget: polarAutoFollow ? { azimuthDeg: lastSunPos.azimuth, altitudeDeg: lastSunPos.altitude } : undefined,
     });
   } else {
+    if (!activeEclipse && horizonAutoZoom) {
+      const separation = angularSeparationDeg(lastSunPos, lastMoonPos);
+      const desiredFov = clamp(separation * HORIZON_AUTOZOOM_FACTOR, HORIZON_AUTOZOOM_MIN_FOV, HORIZON_AUTOZOOM_MAX_FOV);
+      fovSlider.value = String(Math.round(desiredFov));
+      fovLabel.textContent = `${fovSlider.value}°`;
+    }
     const bodies: HorizonBody[] = [
       { azimuthDeg: lastSunPos.azimuth, altitudeDeg: lastSunPos.altitude, angularRadiusDeg: lastSunPos.angularRadius, color: SUN_COLOR, label: 'Sun' },
       { azimuthDeg: lastMoonPos.azimuth, altitudeDeg: lastMoonPos.altitude, angularRadiusDeg: lastMoonPos.angularRadius, color: MOON_COLOR, label: 'Moon' },
@@ -238,11 +328,6 @@ function renderFrame(minutesOfDay: number): void {
 
   lastSunPos = getSunPosition(location, instant);
   lastMoonPos = getMoonPosition(location, instant);
-
-  if (!headingSetByUser) {
-    headingSlider.value = String(Math.round(lastSunPos.azimuth));
-    headingLabel.textContent = headingLabelText(Number(headingSlider.value));
-  }
 
   redrawCanvases();
 
@@ -413,11 +498,6 @@ function renderEclipseFrame(fraction: number): void {
   lastSunPos = getSunPosition(location, time);
   lastMoonPos = getMoonPosition(location, time);
 
-  if (!headingSetByUser) {
-    headingSlider.value = String(Math.round(lastSunPos.azimuth));
-    headingLabel.textContent = headingLabelText(Number(headingSlider.value));
-  }
-
   redrawCanvases();
   eclipseScrubTime.textContent = time.toLocaleString([], {
     weekday: 'short',
@@ -446,7 +526,7 @@ const eclipsePlayer = new RangePlayer({
 /** Resets eclipse-mode UI/state without touching which view is showing — used by both exit and view-switch paths. */
 function clearEclipseUI(): void {
   activeEclipse = null;
-  headingSetByUser = false;
+  setHorizonAutoFollow(true);
   timeControlsEl.hidden = false;
   eclipseScrubPanel.hidden = true;
   eclipsePlayer.pause();
@@ -462,7 +542,8 @@ function enterEclipseMode(which: 'past' | 'next'): void {
   timeline.pause();
   if (!activeEclipse) viewBeforeEclipse = activeView;
   activeEclipse = eclipse;
-  headingSetByUser = false;
+  setHorizonAutoFollow(true);
+  setHorizonAutoZoom(false);
   fovSlider.value = String(ECLIPSE_CLOSEUP_FOV_DEG);
   fovLabel.textContent = `${ECLIPSE_CLOSEUP_FOV_DEG}°`;
 
@@ -594,23 +675,109 @@ viewPolarBtn.addEventListener('click', () => setView('polar'));
 viewHorizonBtn.addEventListener('click', () => setView('horizon'));
 
 headingSlider.addEventListener('input', () => {
-  headingSetByUser = true;
+  setHorizonAutoFollow(false);
   headingLabel.textContent = headingLabelText(Number(headingSlider.value));
   redrawCanvases();
 });
 
 fovSlider.addEventListener('input', () => {
+  setHorizonAutoZoom(false);
   fovLabel.textContent = `${fovSlider.value}°`;
   redrawCanvases();
 });
 
 compassQuickButtons.forEach((btn) => {
   btn.addEventListener('click', () => {
-    headingSetByUser = true;
+    setHorizonAutoFollow(false);
     headingSlider.value = btn.dataset.heading!;
     headingLabel.textContent = headingLabelText(Number(headingSlider.value));
     redrawCanvases();
   });
+});
+
+horizonAutoFollowBtn.addEventListener('click', () => {
+  setHorizonAutoFollow(!horizonAutoFollow);
+  redrawCanvases();
+});
+
+horizonAutoZoomBtn.addEventListener('click', () => {
+  setHorizonAutoZoom(!horizonAutoZoom);
+  redrawCanvases();
+});
+
+polarAutoFollowBtn.addEventListener('click', () => {
+  setPolarAutoFollow(!polarAutoFollow);
+  redrawCanvases();
+});
+
+polarAutoZoomBtn.addEventListener('click', () => {
+  setPolarAutoZoom(!polarAutoZoom);
+  redrawCanvases();
+});
+
+polarResetBtn.addEventListener('click', () => {
+  polarZoom = 1;
+  polarPanX = 0;
+  polarPanY = 0;
+  redrawCanvases();
+});
+
+// --- Canvas interactivity: mouse drag/wheel, touch drag/pinch --------------
+
+attachViewportInteraction(horizonCanvas, {
+  onInteractionStart: () => {
+    setHorizonAutoFollow(false);
+    setHorizonAutoZoom(false);
+  },
+  onPan: (dx) => {
+    const pxPerDeg = getCanvasCssSize(horizonCanvas).width / Number(fovSlider.value);
+    headingSlider.value = String(Math.round(normalizeAzimuth(Number(headingSlider.value) - dx / pxPerDeg)));
+    headingLabel.textContent = headingLabelText(Number(headingSlider.value));
+    redrawCanvases();
+  },
+  onZoom: (factor) => {
+    const newFov = clamp(Number(fovSlider.value) / factor, Number(fovSlider.min), Number(fovSlider.max));
+    fovSlider.value = String(Math.round(newFov));
+    fovLabel.textContent = `${fovSlider.value}°`;
+    redrawCanvases();
+  },
+  onReset: () => {
+    setHorizonAutoFollow(true);
+    setHorizonAutoZoom(true);
+    redrawCanvases();
+  },
+});
+
+attachViewportInteraction(polarCanvas, {
+  onInteractionStart: () => {
+    setPolarAutoFollow(false);
+    setPolarAutoZoom(false);
+  },
+  onPan: (dx, dy) => {
+    const outerRadius = getCanvasCssSize(polarCanvas).width / 2 - POLAR_PLOT_PADDING_PX;
+    const maxPan = Math.max(outerRadius * polarZoom, outerRadius);
+    polarPanX = clamp(polarPanX + dx, -maxPan, maxPan);
+    polarPanY = clamp(polarPanY + dy, -maxPan, maxPan);
+    redrawCanvases();
+  },
+  onZoom: (factor, centerXPx, centerYPx) => {
+    const center = getCanvasCssSize(polarCanvas).width / 2;
+    const oldZoom = polarZoom;
+    const newZoom = clamp(oldZoom * factor, 1, POLAR_MAX_ZOOM);
+    const k = newZoom / oldZoom;
+    polarPanX = (centerXPx - center) * (1 - k) + k * polarPanX;
+    polarPanY = (centerYPx - center) * (1 - k) + k * polarPanY;
+    polarZoom = newZoom;
+    redrawCanvases();
+  },
+  onReset: () => {
+    polarZoom = 1;
+    polarPanX = 0;
+    polarPanY = 0;
+    setPolarAutoFollow(true);
+    setPolarAutoZoom(true);
+    redrawCanvases();
+  },
 });
 
 startLiveMode();

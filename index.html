@@ -74,10 +74,20 @@
         <div class="plot-col">
           <div id="polar-wrap" class="plot-wrap">
             <canvas id="sky-plot" width="600" height="600"></canvas>
+            <div class="auto-toggles">
+              <button id="polar-autofollow-btn" type="button" class="auto-toggle-btn" aria-pressed="false">🎯 Auto follow</button>
+              <button id="polar-autozoom-btn" type="button" class="auto-toggle-btn" aria-pressed="false">🔍 Auto zoom</button>
+              <button id="polar-reset-btn" type="button" class="auto-toggle-btn">⟲ Reset view</button>
+            </div>
+            <p class="interaction-hint">Drag to pan &middot; scroll or pinch to zoom &middot; double-click to recenter</p>
           </div>
 
           <div id="horizon-wrap" class="plot-wrap horizon-wrap" hidden>
             <canvas id="horizon-plot"></canvas>
+            <div class="auto-toggles">
+              <button id="horizon-autofollow-btn" type="button" class="auto-toggle-btn" aria-pressed="true">🎯 Auto follow</button>
+              <button id="horizon-autozoom-btn" type="button" class="auto-toggle-btn" aria-pressed="false">🔍 Auto zoom</button>
+            </div>
             <div class="horizon-controls">
               <label class="field heading-field">
                 <span>Heading</span>
@@ -96,6 +106,7 @@
                 <output id="fov-label" for="fov-slider">90°</output>
               </label>
             </div>
+            <p class="interaction-hint">Drag to look around &middot; scroll or pinch to zoom &middot; double-click to recenter</p>
           </div>
 
           <div class="legend">
