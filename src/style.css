@@ -1,0 +1,442 @@
+:root {
+  --text: #3c3a41;
+  --text-h: #08060d;
+  --text-dim: #7a7783;
+  --bg: #f7f7f9;
+  --panel-bg: #ffffff;
+  --border: #e2e1e6;
+  --accent: #f5a623;
+  --accent-dim: #f5a62333;
+  --sky-ring: #d8d7de;
+
+  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, Consolas, monospace;
+
+  font: 16px/145% var(--sans);
+  color-scheme: light dark;
+  color: var(--text);
+  background: var(--bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #c7c5cc;
+    --text-h: #f3f4f6;
+    --text-dim: #8b8996;
+    --bg: #0f1115;
+    --panel-bg: #171922;
+    --border: #2c2e38;
+    --sky-ring: #33333f;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* The UA [hidden] rule loses to any author rule that also sets `display`
+   (e.g. `.panel { display: flex }`); pin it so element.hidden always wins. */
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+}
+
+#app {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 20px 64px;
+}
+
+header {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+h1 {
+  font-size: 28px;
+  margin: 0 0 4px;
+  color: var(--text-h);
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--text-dim);
+}
+
+.panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: end;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  margin: 0 auto;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+label {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+input {
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-h);
+  width: 11em;
+}
+
+button {
+  font: inherit;
+  padding: 9px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--accent-dim);
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--accent);
+}
+
+.status {
+  text-align: center;
+  min-height: 1.2em;
+  color: var(--text-dim);
+  font-size: 14px;
+  margin: 8px 0 0;
+}
+
+.time-panel {
+  margin-top: 16px;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.time-panel #time-slider {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.time-label {
+  font-family: var(--mono);
+  color: var(--text-h);
+  min-width: 4.5em;
+  text-align: center;
+}
+
+.speed-field {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.speed-field select {
+  font: inherit;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-h);
+}
+
+@media (max-width: 640px) {
+  .time-panel {
+    flex-wrap: wrap;
+  }
+  .time-panel #time-slider {
+    order: 1;
+    flex-basis: 100%;
+  }
+}
+
+.view-toggle {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  margin-top: 20px;
+}
+
+.view-toggle button {
+  background: transparent;
+  border: 1px solid var(--border);
+}
+
+.view-toggle button[aria-selected='true'] {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--text-h);
+}
+
+.layout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  justify-content: center;
+  align-items: flex-start;
+  margin-top: 16px;
+}
+
+.plot-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.plot-wrap {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+#sky-plot {
+  width: min(560px, 84vw);
+  height: min(560px, 84vw);
+  display: block;
+}
+
+.horizon-wrap {
+  width: min(560px, 84vw);
+  box-sizing: content-box;
+}
+
+#horizon-plot {
+  width: 100%;
+  height: min(340px, 60vw);
+  display: block;
+  border-radius: 8px;
+}
+
+.horizon-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.heading-field,
+.fov-field {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 180px;
+}
+
+.heading-field input,
+.fov-field input {
+  flex: 1 1 auto;
+  min-width: 80px;
+  accent-color: var(--accent);
+}
+
+.heading-field output,
+.fov-field output {
+  font-family: var(--mono);
+  color: var(--text-h);
+  min-width: 4.5em;
+  text-align: right;
+}
+
+.compass-quick {
+  display: flex;
+  gap: 4px;
+}
+
+.compass-quick button {
+  padding: 6px 10px;
+}
+
+.legend {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.swatch.sun {
+  background: #f5a623;
+}
+
+.swatch.moon {
+  background: #b9c4d6;
+}
+
+.side-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 220px;
+}
+
+.info-panel {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 20px;
+  min-width: 220px;
+}
+
+.info-panel h2 {
+  font-size: 15px;
+  margin: 0 0 12px;
+  color: var(--text-h);
+}
+
+.times {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 6px 16px;
+}
+
+.times dt {
+  color: var(--text-dim);
+}
+
+.times dd {
+  margin: 0;
+  font-family: var(--mono);
+  text-align: right;
+  color: var(--text-h);
+}
+
+.eclipse-card {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  margin-top: 12px;
+}
+
+.eclipse-card:first-child {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 0;
+}
+
+.eclipse-card h3 {
+  font-size: 14px;
+  margin: 0 0 6px;
+  color: var(--text-h);
+}
+
+.eclipse-kind {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-dim);
+  color: var(--text-h);
+  margin-left: 6px;
+}
+
+.eclipse-magnitude {
+  color: var(--text-dim);
+  font-size: 13px;
+  margin: 0 0 8px;
+}
+
+.eclipse-contacts {
+  margin: 0 0 10px;
+  font-size: 13px;
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 4px 12px;
+}
+
+.eclipse-contacts dt {
+  color: var(--text-dim);
+}
+
+.eclipse-contacts dd {
+  margin: 0;
+  font-family: var(--mono);
+  text-align: right;
+  color: var(--text-h);
+}
+
+.eclipse-contacts dd.below-horizon::after {
+  content: ' (below horizon)';
+  font-family: var(--sans);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.eclipse-view-btn {
+  width: 100%;
+}
+
+.eclipse-scrub {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.eclipse-scrub-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.eclipse-scrub-header strong {
+  color: var(--text-h);
+}
+
+.eclipse-scrub #eclipse-scrub-slider {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.eclipse-scrub-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+#eclipse-scrub-time {
+  text-align: center;
+  font-family: var(--mono);
+  color: var(--text-h);
+}

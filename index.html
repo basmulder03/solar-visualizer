@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Solar Visualizer</title>
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <h1>Solar Visualizer</h1>
+        <p class="subtitle">Sun &amp; Moon position in the sky, from anywhere on Earth.</p>
+      </header>
+
+      <form id="location-form" class="panel">
+        <div class="field">
+          <label for="latitude">Latitude</label>
+          <input id="latitude" name="latitude" type="number" step="any" min="-90" max="90" required />
+        </div>
+        <div class="field">
+          <label for="longitude">Longitude</label>
+          <input id="longitude" name="longitude" type="number" step="any" min="-180" max="180" required />
+        </div>
+        <div class="field">
+          <label for="date">Date</label>
+          <input id="date" name="date" type="date" required />
+        </div>
+        <button id="use-location" type="button">📍 Use my location</button>
+      </form>
+      <p id="location-status" class="status" role="status"></p>
+
+      <div id="time-controls" class="panel time-panel">
+        <button id="play-pause" type="button" aria-pressed="false">▶ Play</button>
+        <input id="time-slider" type="range" min="0" max="1439" step="1" value="0" aria-label="Time of day" />
+        <output id="time-label" for="time-slider" class="time-label">00:00</output>
+        <label class="field speed-field">
+          <span>Speed</span>
+          <select id="speed-select">
+            <option value="1">1 min/s</option>
+            <option value="5">5 min/s</option>
+            <option value="15" selected>15 min/s</option>
+            <option value="60">60 min/s</option>
+            <option value="240">4 hr/s</option>
+          </select>
+        </label>
+        <button id="jump-now" type="button">⏱ Now</button>
+      </div>
+
+      <div id="eclipse-scrub-panel" class="panel eclipse-scrub" hidden>
+        <div class="eclipse-scrub-header">
+          <strong id="eclipse-scrub-title">Eclipse</strong>
+          <button id="exit-eclipse-btn" type="button">✕ Exit eclipse view</button>
+        </div>
+        <input id="eclipse-scrub-slider" type="range" min="0" max="1000" step="1" value="0" aria-label="Eclipse timeline" />
+        <div class="eclipse-scrub-labels">
+          <span>First contact</span>
+          <span>Maximum</span>
+          <span>Last contact</span>
+        </div>
+        <output id="eclipse-scrub-time" for="eclipse-scrub-slider"></output>
+      </div>
+
+      <div class="view-toggle" role="tablist">
+        <button id="view-polar-btn" type="button" role="tab" aria-selected="true">Polar view</button>
+        <button id="view-horizon-btn" type="button" role="tab" aria-selected="false">Horizon view</button>
+      </div>
+
+      <main class="layout">
+        <div class="plot-col">
+          <div id="polar-wrap" class="plot-wrap">
+            <canvas id="sky-plot" width="600" height="600"></canvas>
+          </div>
+
+          <div id="horizon-wrap" class="plot-wrap horizon-wrap" hidden>
+            <canvas id="horizon-plot"></canvas>
+            <div class="horizon-controls">
+              <label class="field heading-field">
+                <span>Heading</span>
+                <input id="heading-slider" type="range" min="0" max="359" step="1" value="180" />
+                <output id="heading-label" for="heading-slider">S (180°)</output>
+              </label>
+              <div class="compass-quick">
+                <button type="button" data-heading="0">N</button>
+                <button type="button" data-heading="90">E</button>
+                <button type="button" data-heading="180">S</button>
+                <button type="button" data-heading="270">W</button>
+              </div>
+              <label class="field fov-field">
+                <span>Field of view</span>
+                <input id="fov-slider" type="range" min="2" max="160" step="1" value="90" />
+                <output id="fov-label" for="fov-slider">90°</output>
+              </label>
+            </div>
+          </div>
+
+          <div class="legend">
+            <span class="legend-item"><i class="swatch sun"></i> Sun</span>
+            <span class="legend-item"><i class="swatch moon"></i> Moon</span>
+          </div>
+        </div>
+
+        <div class="side-col">
+          <aside class="info-panel">
+            <h2>Sun times</h2>
+            <dl id="sun-times" class="times"></dl>
+          </aside>
+
+          <aside class="info-panel">
+            <h2>Solar eclipses</h2>
+            <div id="eclipse-content">
+              <p class="status">Searching…</p>
+            </div>
+          </aside>
+        </div>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
