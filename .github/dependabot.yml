@@ -1,0 +1,41 @@
+version: 2
+
+updates:
+  # JavaScript/TypeScript dependencies (package.json).
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    groups:
+      # Minor/patch bumps are low-risk, so bundle each side of the dependency
+      # tree into a single PR. Majors are left out of both groups on purpose —
+      # they can carry breaking changes (e.g. Vite, TypeScript, Vitest), so
+      # each gets its own PR to review individually rather than being bundled.
+      production-minor-patch:
+        dependency-type: "production"
+        update-types:
+          - "minor"
+          - "patch"
+      development-minor-patch:
+        dependency-type: "development"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Actions used by .github/workflows/deploy.yml.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
