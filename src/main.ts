@@ -17,6 +17,7 @@ import { drawHorizonView, type HorizonBody } from './horizonView.ts';
 import { MINUTES_PER_DAY, RangePlayer } from './timeline.ts';
 import { getCanvasCssSize } from './canvasSize.ts';
 import { attachViewportInteraction } from './viewportInteraction.ts';
+import type { GlobePicker } from './globePicker.ts';
 
 const SUN_COLOR = '#f5a623';
 const MOON_COLOR = '#b9c4d6';
@@ -41,6 +42,9 @@ const latInput = document.querySelector<HTMLInputElement>('#latitude')!;
 const lonInput = document.querySelector<HTMLInputElement>('#longitude')!;
 const dateInput = document.querySelector<HTMLInputElement>('#date')!;
 const useLocationBtn = document.querySelector<HTMLButtonElement>('#use-location')!;
+const globeToggleBtn = document.querySelector<HTMLButtonElement>('#globe-toggle-btn')!;
+const globeWrap = document.querySelector<HTMLDivElement>('#globe-wrap')!;
+const globeCanvas = document.querySelector<HTMLCanvasElement>('#globe-canvas')!;
 const statusEl = document.querySelector<HTMLParagraphElement>('#location-status')!;
 const sunTimesEl = document.querySelector<HTMLDListElement>('#sun-times')!;
 const eclipseContentEl = document.querySelector<HTMLDivElement>('#eclipse-content')!;
@@ -92,6 +96,9 @@ let moonPath: PlotPoint[] = [];
 // Cached instantaneous positions; recomputed once per time tick, reused when heading/FOV change.
 let lastSunPos: BodyPosition | null = null;
 let lastMoonPos: BodyPosition | null = null;
+
+// Lazy-loaded (d3-geo + world map data are only worth fetching if the user opens the picker).
+let globePicker: GlobePicker | null = null;
 
 // Horizon view: heading auto-tracks the Sun and/or FOV auto-adapts to the Sun-Moon separation,
 // each independently toggleable; either is disabled the instant the user manually drags/scrolls.
@@ -619,6 +626,7 @@ function useMyLocation(): void {
       statusEl.textContent = `Location set (±${Math.round(position.coords.accuracy)}m accuracy).`;
       recomputeDay();
       recomputeEclipses();
+      globePicker?.setLocation(latInput.valueAsNumber, lonInput.valueAsNumber, { recenter: true });
     },
     (error) => {
       statusEl.textContent = `Could not get location: ${error.message}`;
@@ -627,12 +635,39 @@ function useMyLocation(): void {
   );
 }
 
+/** Opens the globe picker on first use, loading d3-geo/world-map data only then; otherwise just toggles visibility. */
+async function toggleGlobePicker(): Promise<void> {
+  const opening = globeWrap.hidden;
+  globeWrap.hidden = !opening;
+  globeToggleBtn.setAttribute('aria-pressed', String(opening));
+  if (!opening) return;
+
+  if (!globePicker) {
+    const { createGlobePicker } = await import('./globePicker.ts');
+    globePicker = createGlobePicker(globeCanvas, {
+      initialLatitude: latInput.valueAsNumber,
+      initialLongitude: lonInput.valueAsNumber,
+      onPick: (lat, lon) => {
+        latInput.value = lat.toFixed(4);
+        lonInput.value = lon.toFixed(4);
+        recomputeDay();
+        scheduleRecomputeEclipses();
+      },
+    });
+  } else {
+    globePicker.setLocation(latInput.valueAsNumber, lonInput.valueAsNumber, { recenter: true });
+  }
+}
+
 latInput.value = String(DEFAULT_LOCATION.latitude);
 lonInput.value = String(DEFAULT_LOCATION.longitude);
 dateInput.value = todayInputValue();
 timeSlider.max = String(MINUTES_PER_DAY - 1);
 
 useLocationBtn.addEventListener('click', useMyLocation);
+globeToggleBtn.addEventListener('click', () => {
+  toggleGlobePicker();
+});
 dateInput.addEventListener('input', () => {
   stopLiveMode();
   withDayFade(recomputeDay);
@@ -641,6 +676,7 @@ dateInput.addEventListener('input', () => {
   el.addEventListener('input', () => {
     recomputeDay();
     scheduleRecomputeEclipses();
+    if (!globeWrap.hidden) globePicker?.setLocation(latInput.valueAsNumber, lonInput.valueAsNumber);
   }),
 );
 window.addEventListener('resize', redrawCanvases);

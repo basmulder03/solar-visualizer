@@ -23,6 +23,10 @@ This project is being built in phases:
   Sun/Moon position, rise/set, twilight, and eclipse calculations — this
   project does not hand-roll any astronomical math
 - Plain HTML5 Canvas for rendering
+- [d3-geo](https://github.com/d3/d3-geo) + [topojson-client](https://github.com/topojson/topojson-client)
+  render the location-picker globe from [world-atlas](https://github.com/topojson/world-atlas)'s
+  bundled (public-domain, Natural Earth) coastline data — no map tiles, no
+  image assets, no network requests, no API keys
 - No backend, no API keys — fully static, deployed to GitHub Pages
 
 ## Local development
@@ -46,6 +50,12 @@ npm run build    # type-check and produce a production build in dist/
   eclipse close-ups centered on the Sun's altitude).
 - `src/timeline.ts` — play/pause/speed/scrub state for the day's time slider,
   shared by both views.
+- `src/viewportInteraction.ts` — unifies mouse drag/wheel and touch drag/pinch
+  into pan/zoom/tap/double-tap callbacks via the Pointer Events API; shared by
+  the polar view, horizon view, and globe picker.
+- `src/globePicker.ts` — lazy-loaded location picker: an orthographic
+  ("spinning globe") projection on a 2D canvas, click/tap to set the
+  latitude/longitude.
 - `src/main.ts` — DOM wiring: inputs, geolocation, view toggle, redraw loop.
 
 ## Deployment
@@ -62,6 +72,8 @@ with the source set to "GitHub Actions" for the workflow to publish.
 
 Astronomical calculations powered by
 [astronomy-engine](https://github.com/cosinekitty/astronomy) by Don Cross.
+Globe coastline data from [Natural Earth](https://www.naturalearthdata.com/)
+via [world-atlas](https://github.com/topojson/world-atlas) (public domain).
 
 ## License
 

@@ -27,8 +27,14 @@
           <input id="date" name="date" type="date" required />
         </div>
         <button id="use-location" type="button">📍 Use my location</button>
+        <button id="globe-toggle-btn" type="button" aria-pressed="false">🌍 Pick on globe</button>
       </form>
       <p id="location-status" class="status" role="status"></p>
+
+      <div id="globe-wrap" class="panel globe-panel" hidden>
+        <canvas id="globe-canvas"></canvas>
+        <p class="interaction-hint">Drag to spin &middot; scroll or pinch to zoom &middot; click to set the location</p>
+      </div>
 
       <div id="time-controls" class="panel time-panel">
         <button id="live-btn" type="button" aria-pressed="true" class="live-btn">🔴 Live</button>

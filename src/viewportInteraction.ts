@@ -15,9 +15,14 @@ export interface ViewportInteractionOptions {
   onInteractionStart?: () => void;
   /** Fired on double-click / double-tap. */
   onReset?: () => void;
+  /** Fired on a plain click/tap: a single pointer, released with negligible movement (not a drag, not part of a pinch). */
+  onTap?: (xPx: number, yPx: number) => void;
 }
 
 const WHEEL_ZOOM_SENSITIVITY = 0.0015;
+const TAP_MOVEMENT_THRESHOLD_PX = 4;
+const DOUBLE_TAP_MS = 300;
+const DOUBLE_TAP_DISTANCE_PX = 30;
 
 export function attachViewportInteraction(element: HTMLElement, options: ViewportInteractionOptions): void {
   element.style.touchAction = 'none';
@@ -26,6 +31,9 @@ export function attachViewportInteraction(element: HTMLElement, options: Viewpor
   let lastPinchDistance: number | null = null;
   let lastPinchMid: { x: number; y: number } | null = null;
   let interacting = false;
+  // Non-null only while the current gesture is still a candidate for onTap: a single pointer
+  // that hasn't moved past the threshold and hasn't been joined by a second pointer.
+  let tapCandidate: { x: number; y: number } | null = null;
 
   const localPoint = (e: { clientX: number; clientY: number }) => {
     const rect = element.getBoundingClientRect();
@@ -46,11 +54,17 @@ export function attachViewportInteraction(element: HTMLElement, options: Viewpor
       // Capture is a best-effort convenience (keeps a drag going if the pointer leaves the
       // element's bounds); a pointer the browser doesn't consider "active" just skips it.
     }
-    pointers.set(e.pointerId, localPoint(e));
-    if (pointers.size === 2) {
-      const [a, b] = [...pointers.values()];
-      lastPinchDistance = Math.hypot(a.x - b.x, a.y - b.y);
-      lastPinchMid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const point = localPoint(e);
+    pointers.set(e.pointerId, point);
+    if (pointers.size === 1) {
+      tapCandidate = point;
+    } else {
+      tapCandidate = null;
+      if (pointers.size === 2) {
+        const [a, b] = [...pointers.values()];
+        lastPinchDistance = Math.hypot(a.x - b.x, a.y - b.y);
+        lastPinchMid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      }
     }
   });
 
@@ -61,6 +75,7 @@ export function attachViewportInteraction(element: HTMLElement, options: Viewpor
     pointers.set(e.pointerId, next);
 
     if (pointers.size === 2) {
+      tapCandidate = null;
       const [a, b] = [...pointers.values()];
       const distance = Math.hypot(a.x - b.x, a.y - b.y);
       const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
@@ -75,6 +90,9 @@ export function attachViewportInteraction(element: HTMLElement, options: Viewpor
       lastPinchDistance = distance;
       lastPinchMid = mid;
     } else if (pointers.size === 1) {
+      if (tapCandidate && Math.hypot(next.x - tapCandidate.x, next.y - tapCandidate.y) > TAP_MOVEMENT_THRESHOLD_PX) {
+        tapCandidate = null;
+      }
       const dx = next.x - prev.x;
       const dy = next.y - prev.y;
       if (dx !== 0 || dy !== 0) {
@@ -84,17 +102,56 @@ export function attachViewportInteraction(element: HTMLElement, options: Viewpor
     }
   });
 
-  const endPointer = (e: PointerEvent) => {
+  // Double-tap/double-click detection is done here (not via the native `dblclick` event) so it's
+  // coordinated with tap resolution: without that, a double-click would fire onTap twice (once per
+  // click) *before* the browser's dblclick fires, e.g. relocating a picked point right before
+  // resetting the view around it. Detected via pointer events, this also works consistently for
+  // touch, which native dblclick synthesis from double-tap doesn't reliably provide everywhere.
+  let pendingTapTimer: number | undefined;
+  let lastTapTime = 0;
+  let lastTapPoint: { x: number; y: number } | null = null;
+
+  const resolveTap = (point: { x: number; y: number }) => {
+    const now = performance.now();
+    const isDoubleTap =
+      now - lastTapTime < DOUBLE_TAP_MS &&
+      lastTapPoint !== null &&
+      Math.hypot(point.x - lastTapPoint.x, point.y - lastTapPoint.y) < DOUBLE_TAP_DISTANCE_PX;
+
+    if (isDoubleTap) {
+      window.clearTimeout(pendingTapTimer);
+      lastTapTime = 0;
+      lastTapPoint = null;
+      options.onReset?.();
+      return;
+    }
+
+    lastTapTime = now;
+    lastTapPoint = point;
+    if (options.onTap) {
+      // Deferred so a following second tap can cancel it and resolve as a double-tap instead.
+      pendingTapTimer = window.setTimeout(() => options.onTap?.(point.x, point.y), DOUBLE_TAP_MS);
+    }
+  };
+
+  const endPointer = (e: PointerEvent, allowTap: boolean) => {
+    const wasOnlyPointer = pointers.size === 1 && pointers.has(e.pointerId);
     pointers.delete(e.pointerId);
     if (pointers.size < 2) {
       lastPinchDistance = null;
       lastPinchMid = null;
     }
-    if (pointers.size === 0) interacting = false;
+    if (pointers.size === 0) {
+      interacting = false;
+      if (allowTap && wasOnlyPointer && tapCandidate) {
+        resolveTap(tapCandidate);
+      }
+      tapCandidate = null;
+    }
   };
-  element.addEventListener('pointerup', endPointer);
-  element.addEventListener('pointercancel', endPointer);
-  element.addEventListener('pointerleave', endPointer);
+  element.addEventListener('pointerup', (e) => endPointer(e, true));
+  element.addEventListener('pointercancel', (e) => endPointer(e, false));
+  element.addEventListener('pointerleave', (e) => endPointer(e, false));
 
   element.addEventListener(
     'wheel',
@@ -108,8 +165,4 @@ export function attachViewportInteraction(element: HTMLElement, options: Viewpor
     },
     { passive: false },
   );
-
-  if (options.onReset) {
-    element.addEventListener('dblclick', () => options.onReset?.());
-  }
 }

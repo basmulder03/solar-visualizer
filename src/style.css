@@ -125,6 +125,26 @@ button:hover {
   margin: 8px 0 0;
 }
 
+.globe-panel {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+#globe-canvas {
+  width: min(360px, 84vw);
+  height: min(360px, 84vw);
+  display: block;
+  border-radius: 50%;
+  touch-action: none;
+  cursor: grab;
+}
+
+#globe-canvas:active {
+  cursor: grabbing;
+}
+
 .time-panel {
   margin-top: 16px;
   flex-wrap: nowrap;
