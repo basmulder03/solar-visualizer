@@ -4,7 +4,7 @@ A small, open-source web app that renders the Sun's and Moon's position in
 the sky from any location on Earth, at any time — including sunrise/sunset,
 twilight bands, and solar eclipses.
 
-**Live demo:** _TODO: add the GitHub Pages URL once deployed_
+**Live demo:** https://basmulder03.github.io/solar-visualizer/
 
 ## Status
 
