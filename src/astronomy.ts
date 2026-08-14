@@ -180,6 +180,51 @@ function toSolarEclipseInfo(info: Astronomy.LocalSolarEclipseInfo): SolarEclipse
   };
 }
 
+export type MoonPhaseName =
+  | 'New Moon'
+  | 'Waxing Crescent'
+  | 'First Quarter'
+  | 'Waxing Gibbous'
+  | 'Full Moon'
+  | 'Waning Gibbous'
+  | 'Last Quarter'
+  | 'Waning Crescent';
+
+export interface MoonPhaseInfo {
+  /** Ecliptic longitude difference between Sun and Moon, in degrees: 0=new, 90=first quarter, 180=full, 270=last quarter. */
+  ageDeg: number;
+  /** Fraction (0-1) of the Moon's visible disc that is illuminated. */
+  illuminatedFraction: number;
+  name: MoonPhaseName;
+}
+
+/** Names the phase in eighths of the cycle, with a small tolerance band around each exact quarter/new/full point. */
+function moonPhaseName(ageDeg: number): MoonPhaseName {
+  const NAMES: MoonPhaseName[] = [
+    'New Moon',
+    'Waxing Crescent',
+    'First Quarter',
+    'Waxing Gibbous',
+    'Full Moon',
+    'Waning Gibbous',
+    'Last Quarter',
+    'Waning Crescent',
+  ];
+  const eighth = Math.round(ageDeg / 45) % 8;
+  return NAMES[eighth];
+}
+
+/** The Moon's current phase (geocentric — the same everywhere on Earth at a given moment). */
+export function getMoonPhase(date: Date): MoonPhaseInfo {
+  const ageDeg = Astronomy.MoonPhase(date);
+  const illumination = Astronomy.Illumination(Astronomy.Body.Moon, date);
+  return {
+    ageDeg,
+    illuminatedFraction: illumination.phase_fraction,
+    name: moonPhaseName(ageDeg),
+  };
+}
+
 /** The next solar eclipse visible (at least partially) from `location`, starting the search at `afterDate`. */
 export function getNextLocalSolarEclipse(location: Location, afterDate: Date): SolarEclipseInfo {
   const observer = toObserver(location);

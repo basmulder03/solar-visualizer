@@ -1,6 +1,7 @@
 import './style.css';
 import {
   getMoonPathForDay,
+  getMoonPhase,
   getMoonPosition,
   getPastAndNextLocalSolarEclipse,
   getSunPathForDay,
@@ -14,6 +15,7 @@ import {
 } from './astronomy.ts';
 import { drawPolarSkyPlot, POLAR_PLOT_PADDING_PX, type BodyMarker, type PlotPoint } from './polarPlot.ts';
 import { drawHorizonView, type HorizonBody } from './horizonView.ts';
+import { drawMoonPhaseIcon } from './moonPhaseIcon.ts';
 import { MINUTES_PER_DAY, RangePlayer } from './timeline.ts';
 import { getCanvasCssSize } from './canvasSize.ts';
 import { attachViewportInteraction } from './viewportInteraction.ts';
@@ -47,6 +49,9 @@ const globeWrap = document.querySelector<HTMLDivElement>('#globe-wrap')!;
 const globeCanvas = document.querySelector<HTMLCanvasElement>('#globe-canvas')!;
 const statusEl = document.querySelector<HTMLParagraphElement>('#location-status')!;
 const sunTimesEl = document.querySelector<HTMLDListElement>('#sun-times')!;
+const moonPhaseIconCanvas = document.querySelector<HTMLCanvasElement>('#moon-phase-icon')!;
+const moonPhaseNameEl = document.querySelector<HTMLParagraphElement>('#moon-phase-name')!;
+const moonPhaseIllumEl = document.querySelector<HTMLParagraphElement>('#moon-phase-illum')!;
 const eclipseContentEl = document.querySelector<HTMLDivElement>('#eclipse-content')!;
 
 const polarCanvas = document.querySelector<HTMLCanvasElement>('#sky-plot')!;
@@ -214,6 +219,17 @@ function renderSunTimes(location: Location, date: Date): void {
   `;
 }
 
+/**
+ * Redraws the moon phase icon/text for the given moment. The phase drifts only ~0.5°/hour, so
+ * this is precise enough recomputed once per day/location change rather than every time tick.
+ */
+function renderMoonPhase(date: Date): void {
+  const phase = getMoonPhase(date);
+  drawMoonPhaseIcon(moonPhaseIconCanvas, phase.ageDeg);
+  moonPhaseNameEl.textContent = phase.name;
+  moonPhaseIllumEl.textContent = `${Math.round(phase.illuminatedFraction * 100)}% illuminated`;
+}
+
 /** Recomputes the cached full-day paths and sun-times text. Call on location/date change. */
 function recomputeDay(): void {
   const location = currentLocation();
@@ -222,6 +238,7 @@ function recomputeDay(): void {
 
   sunPath = getSunPathForDay(location, date).map((p) => ({ azimuthDeg: p.azimuth, altitudeDeg: p.altitude }));
   moonPath = getMoonPathForDay(location, date).map((p) => ({ azimuthDeg: p.azimuth, altitudeDeg: p.altitude }));
+  renderMoonPhase(date);
   renderSunTimes(location, date);
   renderFrame(timeline.value);
 }
@@ -790,6 +807,9 @@ attachViewportInteraction(polarCanvas, {
     setPolarAutoZoom(false);
   },
   onPan: (dx, dy) => {
+    // At 1x there's nothing off-screen to reveal by panning — ignore drags so the plot can't be
+    // left off-center with no zoom gesture available to bring it back.
+    if (polarZoom <= 1) return;
     const outerRadius = getCanvasCssSize(polarCanvas).width / 2 - POLAR_PLOT_PADDING_PX;
     const maxPan = Math.max(outerRadius * polarZoom, outerRadius);
     polarPanX = clamp(polarPanX + dx, -maxPan, maxPan);
@@ -800,9 +820,16 @@ attachViewportInteraction(polarCanvas, {
     const center = getCanvasCssSize(polarCanvas).width / 2;
     const oldZoom = polarZoom;
     const newZoom = clamp(oldZoom * factor, 1, POLAR_MAX_ZOOM);
-    const k = newZoom / oldZoom;
-    polarPanX = (centerXPx - center) * (1 - k) + k * polarPanX;
-    polarPanY = (centerYPx - center) * (1 - k) + k * polarPanY;
+    if (newZoom <= 1) {
+      // Fully zoomed out: snap back to centered instead of leaving whatever pan offset the last
+      // zoom-around-cursor gesture happened to produce.
+      polarPanX = 0;
+      polarPanY = 0;
+    } else {
+      const k = newZoom / oldZoom;
+      polarPanX = (centerXPx - center) * (1 - k) + k * polarPanX;
+      polarPanY = (centerYPx - center) * (1 - k) + k * polarPanY;
+    }
     polarZoom = newZoom;
     redrawCanvases();
   },
