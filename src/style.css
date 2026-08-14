@@ -277,7 +277,6 @@ button:hover {
 
 #sky-plot,
 #horizon-plot {
-  transition: opacity 180ms ease;
   touch-action: none;
   cursor: grab;
 }
@@ -285,11 +284,6 @@ button:hover {
 #sky-plot:active,
 #horizon-plot:active {
   cursor: grabbing;
-}
-
-#sky-plot.day-fade,
-#horizon-plot.day-fade {
-  opacity: 0.2;
 }
 
 #sky-plot {

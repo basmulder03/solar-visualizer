@@ -29,8 +29,9 @@ const ECLIPSE_SEARCH_DEBOUNCE_MS = 400;
 // Slider units (0-1000) per second; a full first-contact-to-last-contact scrub takes ~20s regardless of the eclipse's real duration.
 const ECLIPSE_PLAY_SPEED = 50;
 const LIVE_TICK_MS = 1000;
-// Matches the CSS transition duration on #sky-plot/#horizon-plot's opacity.
-const DAY_FADE_MS = 180;
+// How long a day-shift (date change, jump-to-now, live midnight rollover) takes to morph the
+// paths/markers from the old day to the new one, instead of popping straight to the new shape.
+const DAY_TRANSITION_MS = 450;
 const POLAR_MAX_ZOOM = 10;
 // Auto-zoom: polarZoom = numerator / max(separationDeg, floor) — tight zoom when Sun/Moon are close (e.g. an eclipse), 1x once they're far apart.
 const POLAR_AUTOZOOM_NUMERATOR = 40;
@@ -188,6 +189,36 @@ function angularSeparationDeg(a: { azimuth: number; altitude: number }, b: { azi
   return Math.hypot(dx, dy);
 }
 
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
+/** Interpolates an angle the short way around (e.g. 350°→10° goes through 0°, not through 180°). */
+function lerpAngleDeg(a: number, b: number, t: number): number {
+  const delta = (((b - a + 540) % 360) + 360) % 360 - 180;
+  return normalizeAzimuth(a + delta * t);
+}
+
+function easeInOutQuad(t: number): number {
+  return t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
+}
+
+function lerpPath(from: PlotPoint[], to: PlotPoint[], t: number): PlotPoint[] {
+  return to.map((point, i) => {
+    const start = from[i] ?? point;
+    return { azimuthDeg: lerpAngleDeg(start.azimuthDeg, point.azimuthDeg, t), altitudeDeg: lerp(start.altitudeDeg, point.altitudeDeg, t) };
+  });
+}
+
+function lerpBodyPosition(from: BodyPosition, to: BodyPosition, t: number): BodyPosition {
+  return {
+    altitude: lerp(from.altitude, to.altitude, t),
+    azimuth: lerpAngleDeg(from.azimuth, to.azimuth, t),
+    angularRadius: lerp(from.angularRadius, to.angularRadius, t),
+    distanceAu: lerp(from.distanceAu, to.distanceAu, t),
+  };
+}
+
 function currentLocation(): Location | null {
   const latitude = latInput.valueAsNumber;
   const longitude = lonInput.valueAsNumber;
@@ -243,20 +274,70 @@ function recomputeDay(): void {
   renderFrame(timeline.value);
 }
 
+let dayTransitionRaf: number | null = null;
+
 /**
  * Softens an explicit day switch (date picker, jump-to-now, live midnight
- * rollover) with a brief cross-fade instead of an instant pixel swap: fades
- * the active canvas out, swaps the content while invisible, fades it back
- * in. Not used for accelerated Play's day-rollover, where continuous motion
- * reads better than a repeated pause.
+ * rollover) by morphing the paths/markers from the old day to the new one
+ * over `DAY_TRANSITION_MS`, instead of popping straight to the new shape.
+ * `action` (typically `recomputeDay`) is run synchronously first so the
+ * "new" values it computes become the tween's end state — its own redraw
+ * never actually reaches the screen, since the transition's first animation
+ * frame (drawing the untouched "old" state at t=0) lands before the next
+ * paint. Not used for accelerated Play's day-rollover, where continuous
+ * motion already reads fine without an extra layered animation.
  */
 function withDayFade(action: () => void): void {
-  const canvas = activeView === 'polar' ? polarCanvas : horizonCanvas;
-  canvas.classList.add('day-fade');
-  window.setTimeout(() => {
-    action();
-    canvas.classList.remove('day-fade');
-  }, DAY_FADE_MS);
+  if (dayTransitionRaf !== null) {
+    cancelAnimationFrame(dayTransitionRaf);
+    dayTransitionRaf = null;
+  }
+
+  const fromSunPath = sunPath;
+  const fromMoonPath = moonPath;
+  const fromSun = lastSunPos;
+  const fromMoon = lastMoonPos;
+
+  action();
+
+  const toSunPath = sunPath;
+  const toMoonPath = moonPath;
+  const toSun = lastSunPos;
+  const toMoon = lastMoonPos;
+
+  if (
+    !fromSun ||
+    !fromMoon ||
+    !toSun ||
+    !toMoon ||
+    fromSunPath.length !== toSunPath.length ||
+    fromMoonPath.length !== toMoonPath.length
+  ) {
+    redrawCanvases();
+    return;
+  }
+
+  const start = performance.now();
+  const step = (now: number): void => {
+    const t = easeInOutQuad(Math.min((now - start) / DAY_TRANSITION_MS, 1));
+    sunPath = lerpPath(fromSunPath, toSunPath, t);
+    moonPath = lerpPath(fromMoonPath, toMoonPath, t);
+    lastSunPos = lerpBodyPosition(fromSun, toSun, t);
+    lastMoonPos = lerpBodyPosition(fromMoon, toMoon, t);
+    redrawCanvases();
+    if (t < 1) {
+      dayTransitionRaf = requestAnimationFrame(step);
+    } else {
+      // Land exactly on the real values so no lerp rounding drift lingers.
+      sunPath = toSunPath;
+      moonPath = toMoonPath;
+      lastSunPos = toSun;
+      lastMoonPos = toMoon;
+      dayTransitionRaf = null;
+      redrawCanvases();
+    }
+  };
+  dayTransitionRaf = requestAnimationFrame(step);
 }
 
 function setHorizonAutoFollow(enabled: boolean): void {

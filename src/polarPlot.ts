@@ -185,6 +185,18 @@ export function drawPolarSkyPlot(canvas: HTMLCanvasElement, options: PolarPlotOp
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       });
+      // A day's sample window (local midnight to midnight) is one calendar day, not exactly one
+      // revolution around the sky — most noticeably for the Moon, whose ~24h50m cycle leaves a
+      // real gap of several degrees between the first and last sample on days it never dips below
+      // the horizon. `aboveHorizonSegments` passes those two original points through by
+      // reference (no synthesized horizon-crossing in between), so a reference-equality check
+      // reliably tells "artificial sampling-window cut" apart from a genuine rise/set — closing
+      // the loop bridges the former with a short chord instead of leaving a visible gap.
+      const isFullDayLoop =
+        segment.length > 2 &&
+        segment[0] === series.points[0] &&
+        segment[segment.length - 1] === series.points[series.points.length - 1];
+      if (isFullDayLoop) ctx.closePath();
       ctx.strokeStyle = series.color;
       ctx.lineWidth = 2;
       ctx.stroke();
