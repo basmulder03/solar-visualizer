@@ -25,8 +25,11 @@ This project is being built in phases:
 - Plain HTML5 Canvas for rendering
 - [d3-geo](https://github.com/d3/d3-geo) + [topojson-client](https://github.com/topojson/topojson-client)
   render the location-picker globe from [world-atlas](https://github.com/topojson/world-atlas)'s
-  bundled (public-domain, Natural Earth) coastline data — no map tiles, no
-  image assets, no network requests, no API keys
+  bundled (public-domain, Natural Earth) coastline/country data, plus two
+  self-simplified layers derived from Natural Earth's 50m data (finer
+  coastlines/country borders, and province/state borders for a handful of
+  large federated countries) that lazy-load once the user zooms in — no map
+  tiles, no image assets, no network requests, no API keys
 - No backend, no API keys — fully static, deployed to GitHub Pages
 
 ## Local development
@@ -55,7 +58,12 @@ npm run build    # type-check and produce a production build in dist/
   the polar view, horizon view, and globe picker.
 - `src/globePicker.ts` — lazy-loaded location picker: an orthographic
   ("spinning globe") projection on a 2D canvas, click/tap to set the
-  latitude/longitude.
+  latitude/longitude. Country borders, province/state borders, and country
+  capitals render in as the user zooms in, backed by `src/data/`.
+- `src/data/` — self-built topojson/JSON assets not published as npm
+  packages: simplified world coastlines/country borders, province/state
+  borders (Natural Earth admin-1, 50m), and country capitals (Natural Earth
+  populated places), all derived from public-domain Natural Earth data.
 - `src/main.ts` — DOM wiring: inputs, geolocation, view toggle, redraw loop.
 
 ## Deployment
@@ -72,8 +80,11 @@ with the source set to "GitHub Actions" for the workflow to publish.
 
 Astronomical calculations powered by
 [astronomy-engine](https://github.com/cosinekitty/astronomy) by Don Cross.
-Globe coastline data from [Natural Earth](https://www.naturalearthdata.com/)
-via [world-atlas](https://github.com/topojson/world-atlas) (public domain).
+Globe coastline, country, province/state, and capital data from
+[Natural Earth](https://www.naturalearthdata.com/) (public domain), via
+[world-atlas](https://github.com/topojson/world-atlas) and, for the layers
+world-atlas doesn't publish, re-simplified in this repo from Natural Earth's
+own data files.
 
 ## License
 
