@@ -3,18 +3,21 @@
  * (globe-look) projection rendered on a plain 2D canvas via d3-geo, with
  * coastlines and country borders from world-atlas's bundled topojson data
  * (a coarse base layer, plus a lazy-loaded finer one re-simplified from
- * Natural Earth's 50m data for when the user zooms in), province/state
- * borders from Natural Earth's admin-1 layer (also lazy-loaded, and only
- * covers a handful of large federated countries at this resolution), and
- * country capitals from Natural Earth's populated-places layer — all public
+ * Natural Earth's 50m data for when the user zooms in), worldwide
+ * province/state borders from Natural Earth's admin-1 layer (also
+ * lazy-loaded, re-simplified from the 10m resolution since the 50m one
+ * only covers a handful of large federated countries), and country
+ * capitals from Natural Earth's populated-places layer — all public
  * domain, all bundled at build time. No image assets, no network requests,
- * no API keys — this works fully offline.
+ * no API keys — this works fully offline. A hover tooltip shows the
+ * country/region under the cursor via point-in-polygon lookups against
+ * this same bundled data.
  */
 
-import { geoOrthographic, geoPath, geoGraticule10, geoCentroid, geoContains, type GeoProjection } from 'd3-geo';
+import { geoOrthographic, geoPath, geoGraticule10, geoCentroid, geoBounds, geoContains, type GeoProjection } from 'd3-geo';
 import { feature } from 'topojson-client';
 import type { GeometryCollection, Topology } from 'topojson-specification';
-import type { FeatureCollection, Geometry } from 'geojson';
+import type { Feature, GeoJsonProperties, Geometry } from 'geojson';
 import landTopology from 'world-atlas/land-110m.json';
 import countryTopology from 'world-atlas/countries-110m.json';
 import capitalsData from './data/capitals.json';
@@ -72,8 +75,8 @@ const ROTATE_SENSITIVITY_DEG_PER_PX = 0.3;
 const ZOOM_SHOW_CAPITAL_DOTS = 1.5;
 const ZOOM_SHOW_CAPITAL_LABELS = 4;
 const ZOOM_SHOW_DETAIL = 2.5;
-const ZOOM_SHOW_ADMIN1_LINES = 2.2;
-const ZOOM_SHOW_ADMIN1_LABELS = 5;
+const ZOOM_SHOW_ADMIN1_LINES = 5;
+const ZOOM_SHOW_ADMIN1_LABELS = 6.5;
 
 const land = feature(landTopology as unknown as Topology, landTopology.objects.land as GeometryCollection);
 const countries = feature(
@@ -82,10 +85,24 @@ const countries = feature(
 );
 const capitals = capitalsData as Capital[];
 
-// Higher-resolution coastlines/country borders and the admin-1 (state/province)
-// layer are separate, lazy-loaded chunks: they only add value once the user has
-// zoomed in, so there's no reason to pay for them on first paint of the picker.
-let detail: { land: typeof land; countries: typeof countries } | null = null;
+interface LabelCandidate {
+  lon: number;
+  lat: number;
+  text: string;
+}
+
+// Precomputed once (not per frame): capitals already carry lat/lon, so this is just a reshape.
+const capitalLabelCandidates: LabelCandidate[] = capitals.map((c) => ({ lon: c.lon, lat: c.lat, text: c.name }));
+
+// Higher-resolution coastlines/country borders and the admin-1 (state/province) layer are
+// separate, lazy-loaded chunks: they only add value once the user has zoomed in, so there's no
+// reason to pay for them on first paint of the picker. Kept as individual islands/countries
+// (rather than one dissolved landmass) specifically so they can be viewport-culled the same way
+// as admin1 regions — see `buildCullableFeatures`/`filterVisible` below.
+let detail: {
+  land: CullableFeature<Record<string, never>>[];
+  countries: CullableFeature<CountryProperties>[];
+} | null = null;
 let detailLoadStarted = false;
 
 function ensureDetailLoaded(onLoaded: () => void): void {
@@ -93,23 +110,82 @@ function ensureDetailLoaded(onLoaded: () => void): void {
   detailLoadStarted = true;
   import('./data/world-detail-50m.json').then((mod) => {
     const topology = mod.default as unknown as Topology;
+    const landFeatures = feature(topology, topology.objects.land as GeometryCollection);
+    const countryFeatures = feature(topology, topology.objects.countries as GeometryCollection<CountryProperties>);
     detail = {
-      land: feature(topology, topology.objects.land as GeometryCollection),
-      countries: feature(topology, topology.objects.countries as GeometryCollection<CountryProperties>),
+      land: buildCullableFeatures(landFeatures.features),
+      countries: buildCullableFeatures(countryFeatures.features),
     };
     onLoaded();
   });
 }
 
-let admin1: FeatureCollection<Geometry, Admin1Properties> | null = null;
+// A feature plus enough precomputed info to cheaply decide, per frame, whether it's worth handing
+// to d3-geo at all. Built once when a layer loads rather than recomputed on every redraw — with
+// e.g. ~4,600 worldwide admin-1 regions, geoCentroid()/geoBounds() are not cheap enough to re-run
+// every frame of a drag, and handing d3-geo's clip machinery a full, un-culled collection (most of
+// which is off-screen) every frame is itself a multi-hundred-millisecond cost. Very large or
+// irregularly-shaped features (continents, Russia, Alaska) get `alwaysInclude: true`: their
+// centroid is a poor stand-in for "is any part of this near the viewport" (imagine standing on the
+// edge of Portugal — Eurasia's centroid is in central Asia), so culling them by centroid risks
+// dropping a landmass that's clearly on screen. They're few enough that always including them is
+// cheap insurance.
+interface CullableFeature<P extends GeoJsonProperties> {
+  feature: Feature<Geometry, P>;
+  lon: number;
+  lat: number;
+  alwaysInclude: boolean;
+}
+
+const LARGE_FEATURE_SPAN_DEG = 40;
+
+function buildCullableFeatures<P extends GeoJsonProperties>(features: Feature<Geometry, P>[]): CullableFeature<P>[] {
+  return features.map((f) => {
+    const [lon, lat] = geoCentroid(f);
+    const [[minLon, minLat], [maxLon, maxLat]] = geoBounds(f);
+    const alwaysInclude = maxLon - minLon > LARGE_FEATURE_SPAN_DEG || maxLat - minLat > LARGE_FEATURE_SPAN_DEG;
+    return { feature: f, lon, lat, alwaysInclude };
+  });
+}
+
+// Keeps only features plausibly visible in the current viewport: always-include features, plus
+// front-facing features whose centroid projects within `marginPx` of the canvas bounds. The margin
+// is generous so a compact-but-not-tiny region whose centroid sits just outside the frame isn't
+// dropped while a sliver of it is still visible.
+function filterVisible<P extends GeoJsonProperties>(
+  cullables: CullableFeature<P>[],
+  rotation: readonly [number, number, number],
+  projection: GeoProjection,
+  cssWidth: number,
+  cssHeight: number,
+  marginPx: number,
+): CullableFeature<P>[] {
+  const result: CullableFeature<P>[] = [];
+  for (const c of cullables) {
+    if (c.alwaysInclude) {
+      result.push(c);
+      continue;
+    }
+    if (!isFrontFacing(c.lon, c.lat, rotation)) continue;
+    const p = projection([c.lon, c.lat]);
+    if (!p) continue;
+    if (p[0] > -marginPx && p[0] < cssWidth + marginPx && p[1] > -marginPx && p[1] < cssHeight + marginPx) {
+      result.push(c);
+    }
+  }
+  return result;
+}
+
+let admin1Regions: CullableFeature<Admin1Properties>[] | null = null;
 let admin1LoadStarted = false;
 
 function ensureAdmin1Loaded(onLoaded: () => void): void {
-  if (admin1 || admin1LoadStarted) return;
+  if (admin1Regions || admin1LoadStarted) return;
   admin1LoadStarted = true;
-  import('./data/admin1-50m-topo.json').then((mod) => {
-    const topology = mod.default as unknown as Topology<{ admin1_50m: GeometryCollection<Admin1Properties> }>;
-    admin1 = feature(topology, topology.objects.admin1_50m);
+  import('./data/admin1-10m-topo.json').then((mod) => {
+    const topology = mod.default as unknown as Topology<{ admin1_10m: GeometryCollection<Admin1Properties> }>;
+    const collection = feature(topology, topology.objects.admin1_10m);
+    admin1Regions = buildCullableFeatures(collection.features);
     onLoaded();
   });
 }
@@ -143,11 +219,36 @@ export function createGlobePicker(canvas: HTMLCanvasElement, options: GlobePicke
     ctx.fillText(text, x, y - fontPx * 0.25);
   }
 
+  // Renders at most one label per `minSpacingPx` screen-pixel neighborhood: with worldwide
+  // admin-1 coverage, a view of e.g. Europe or the Middle East has hundreds of front-facing
+  // regions, and drawing (let alone measuring) a label for every one of them both tanks frame
+  // time and produces an illegible pile of overlapping text. Off-screen candidates (front-facing
+  // but outside the current zoomed viewport) are skipped before any text metrics are touched.
+  function drawDeclutteredLabels(
+    ctx: CanvasRenderingContext2D,
+    candidates: LabelCandidate[],
+    fontPx: number,
+    minSpacingPx: number,
+    cssWidth: number,
+    cssHeight: number,
+    offsetY = 0,
+  ): void {
+    const placed: { x: number; y: number }[] = [];
+    for (const { lon, lat, text } of candidates) {
+      if (!isFrontFacing(lon, lat, rotation)) continue;
+      const projected = projection([lon, lat]);
+      if (!projected) continue;
+      const [x, y] = projected;
+      if (x < -20 || x > cssWidth + 20 || y < -20 || y > cssHeight + 20) continue;
+      if (placed.some((p) => Math.hypot(p.x - x, p.y - y) < minSpacingPx)) continue;
+      placed.push({ x, y });
+      drawLabel(ctx, x, y + offsetY, text, fontPx);
+    }
+  }
+
   function draw(): void {
     if (zoom >= ZOOM_SHOW_DETAIL) ensureDetailLoaded(draw);
     if (zoom >= ZOOM_SHOW_ADMIN1_LINES) ensureAdmin1Loaded(draw);
-    const activeLand = detail?.land ?? land;
-    const activeCountries = detail?.countries ?? countries;
 
     const dpr = window.devicePixelRatio || 1;
     const { width: cssWidth, height: cssHeight } = getCanvasCssSize(canvas);
@@ -163,6 +264,26 @@ export function createGlobePicker(canvas: HTMLCanvasElement, options: GlobePicke
     const baseScale = (Math.min(cssWidth, cssHeight) / 2) * 0.94;
     projection.translate([cssWidth / 2, cssHeight / 2]).scale(baseScale * zoom).rotate(rotation);
     const path = geoPath(projection, ctx);
+
+    // Viewport-relative culling margin, shared by the land/country detail layer and admin-1: see
+    // the `CullableFeature`/`filterVisible` doc comment above for why this matters.
+    const cullMarginPx = Math.max(cssWidth, cssHeight) * 0.08;
+    const activeLand = detail
+      ? {
+          type: 'FeatureCollection' as const,
+          features: filterVisible(detail.land, rotation, projection, cssWidth, cssHeight, cullMarginPx).map(
+            (c) => c.feature,
+          ),
+        }
+      : land;
+    const activeCountries = detail
+      ? {
+          type: 'FeatureCollection' as const,
+          features: filterVisible(detail.countries, rotation, projection, cssWidth, cssHeight, cullMarginPx).map(
+            (c) => c.feature,
+          ),
+        }
+      : countries;
 
     // Sphere fill, with a soft gradient so the flat projection still reads as a lit sphere.
     ctx.beginPath();
@@ -199,23 +320,29 @@ export function createGlobePicker(canvas: HTMLCanvasElement, options: GlobePicke
     // Province/state borders, once loaded and zoomed in enough to be useful. Drawn bolder and
     // in a distinct hue from country borders since disambiguating regions matters most for
     // picking a precise location.
-    if (admin1 && zoom >= ZOOM_SHOW_ADMIN1_LINES) {
+    if (admin1Regions && zoom >= ZOOM_SHOW_ADMIN1_LINES) {
+      // Same viewport pre-filter as the land/country detail layer above: handing d3-geo's clip
+      // machinery the full worldwide ~4,600-region/77k-point collection every frame (the
+      // front-facing hemisphere alone can still be most of it — e.g. Europe/Africa/Asia together
+      // hold a large share of the world's admin-1 subdivisions) is what actually costs hundreds of
+      // milliseconds here, not the final stroke — the geometry work happens in `path()`, not in
+      // `ctx.stroke()`.
+      const visible = filterVisible(admin1Regions, rotation, projection, cssWidth, cssHeight, cullMarginPx);
       ctx.beginPath();
-      ctx.setLineDash([4, 2]);
-      path(admin1);
+      path({ type: 'FeatureCollection', features: visible.map((r) => r.feature) });
       ctx.strokeStyle = ADMIN1_BORDER_COLOR;
       ctx.lineWidth = 0.9;
       ctx.stroke();
-      ctx.setLineDash([]);
 
       if (zoom >= ZOOM_SHOW_ADMIN1_LABELS) {
-        for (const region of admin1.features) {
-          const [lon, lat] = geoCentroid(region);
-          if (!isFrontFacing(lon, lat, rotation)) continue;
-          const projected = projection([lon, lat]);
-          if (!projected) continue;
-          drawLabel(ctx, projected[0], projected[1], region.properties.name, 10);
-        }
+        drawDeclutteredLabels(
+          ctx,
+          visible.map((r) => ({ lon: r.lon, lat: r.lat, text: r.feature.properties.name })),
+          10,
+          36,
+          cssWidth,
+          cssHeight,
+        );
       }
     }
 
@@ -228,17 +355,19 @@ export function createGlobePicker(canvas: HTMLCanvasElement, options: GlobePicke
 
     // Country capitals.
     if (zoom >= ZOOM_SHOW_CAPITAL_DOTS) {
-      const showLabels = zoom >= ZOOM_SHOW_CAPITAL_LABELS;
       for (const capital of capitals) {
         if (!isFrontFacing(capital.lon, capital.lat, rotation)) continue;
         const projected = projection([capital.lon, capital.lat]);
         if (!projected) continue;
         const [cx, cy] = projected;
+        if (cx < -10 || cx > cssWidth + 10 || cy < -10 || cy > cssHeight + 10) continue;
         ctx.beginPath();
         ctx.arc(cx, cy, 2, 0, Math.PI * 2);
         ctx.fillStyle = CAPITAL_DOT_COLOR;
         ctx.fill();
-        if (showLabels) drawLabel(ctx, cx, cy - 4, capital.name, 10);
+      }
+      if (zoom >= ZOOM_SHOW_CAPITAL_LABELS) {
+        drawDeclutteredLabels(ctx, capitalLabelCandidates, 10, 30, cssWidth, cssHeight, -4);
       }
     }
 
@@ -282,9 +411,9 @@ export function createGlobePicker(canvas: HTMLCanvasElement, options: GlobePicke
       hideHover();
       return;
     }
-    const activeCountries = detail?.countries ?? countries;
+    const activeCountryFeatures = detail ? detail.countries.map((c) => c.feature) : countries.features;
     let countryName: string | null = null;
-    for (const country of activeCountries.features) {
+    for (const country of activeCountryFeatures) {
       if (geoContains(country, point)) {
         countryName = country.properties.name;
         break;
@@ -295,10 +424,11 @@ export function createGlobePicker(canvas: HTMLCanvasElement, options: GlobePicke
       return;
     }
     let label = countryName;
-    if (admin1 && zoom >= ZOOM_SHOW_ADMIN1_LINES) {
-      for (const region of admin1.features) {
-        if (geoContains(region, point)) {
-          label = `${region.properties.name}, ${countryName}`;
+    if (admin1Regions && zoom >= ZOOM_SHOW_ADMIN1_LINES) {
+      for (const region of admin1Regions) {
+        if (!isFrontFacing(region.lon, region.lat, rotation)) continue;
+        if (geoContains(region.feature, point)) {
+          label = `${region.feature.properties.name}, ${countryName}`;
           break;
         }
       }

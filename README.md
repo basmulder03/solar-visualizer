@@ -26,10 +26,14 @@ This project is being built in phases:
 - [d3-geo](https://github.com/d3/d3-geo) + [topojson-client](https://github.com/topojson/topojson-client)
   render the location-picker globe from [world-atlas](https://github.com/topojson/world-atlas)'s
   bundled (public-domain, Natural Earth) coastline/country data, plus two
-  self-simplified layers derived from Natural Earth's 50m data (finer
-  coastlines/country borders, and province/state borders for a handful of
-  large federated countries) that lazy-load once the user zooms in — no map
-  tiles, no image assets, no network requests, no API keys
+  self-simplified layers derived from Natural Earth's 50m (finer
+  coastlines/country borders) and 10m (worldwide province/state borders —
+  50m only covers a handful of large federated countries) data that
+  lazy-load once the user zooms in. A hover tooltip and the province/state
+  and country-border rendering are all viewport-culled so panning/zooming
+  over dense regions (Europe, the Middle East) stays smooth even with
+  worldwide province-level data loaded — no map tiles, no image assets, no
+  network requests, no API keys
 - No backend, no API keys — fully static, deployed to GitHub Pages
 
 ## Local development
@@ -58,12 +62,17 @@ npm run build    # type-check and produce a production build in dist/
   the polar view, horizon view, and globe picker.
 - `src/globePicker.ts` — lazy-loaded location picker: an orthographic
   ("spinning globe") projection on a 2D canvas, click/tap to set the
-  latitude/longitude. Country borders, province/state borders, and country
-  capitals render in as the user zooms in, backed by `src/data/`.
+  latitude/longitude. Country borders, worldwide province/state borders,
+  and country capitals render in as the user zooms in, backed by
+  `src/data/`, with a hover tooltip showing the country/region under the
+  cursor. The heavier layers are viewport-culled per frame (not just
+  hemisphere-culled) so dense regions stay responsive.
 - `src/data/` — self-built topojson/JSON assets not published as npm
-  packages: simplified world coastlines/country borders, province/state
-  borders (Natural Earth admin-1, 50m), and country capitals (Natural Earth
-  populated places), all derived from public-domain Natural Earth data.
+  packages: simplified world coastlines/country borders (Natural Earth
+  50m), worldwide province/state borders (Natural Earth admin-1, 10m —
+  the 50m version only covers 9 large federated countries), and country
+  capitals (Natural Earth populated places), all derived from
+  public-domain Natural Earth data.
 - `src/main.ts` — DOM wiring: inputs, geolocation, view toggle, redraw loop.
 
 ## Deployment
