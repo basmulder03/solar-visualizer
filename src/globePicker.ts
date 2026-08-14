@@ -11,7 +11,7 @@
  * no API keys — this works fully offline.
  */
 
-import { geoOrthographic, geoPath, geoGraticule10, geoCentroid, type GeoProjection } from 'd3-geo';
+import { geoOrthographic, geoPath, geoGraticule10, geoCentroid, geoContains, type GeoProjection } from 'd3-geo';
 import { feature } from 'topojson-client';
 import type { GeometryCollection, Topology } from 'topojson-specification';
 import type { FeatureCollection, Geometry } from 'geojson';
@@ -55,7 +55,7 @@ const OCEAN_BOTTOM = '#1c3a5e';
 const LAND_FILL = '#e8dcc0';
 const LAND_STROKE = '#a99a72';
 const COUNTRY_BORDER_COLOR = 'rgba(90, 70, 40, 0.55)';
-const ADMIN1_BORDER_COLOR = 'rgba(90, 70, 40, 0.35)';
+const ADMIN1_BORDER_COLOR = 'rgba(60, 45, 110, 0.6)';
 const GRATICULE_COLOR = 'rgba(255, 255, 255, 0.18)';
 const OUTLINE_COLOR = 'rgba(0, 0, 0, 0.25)';
 const MARKER_COLOR = '#f5423a';
@@ -72,8 +72,8 @@ const ROTATE_SENSITIVITY_DEG_PER_PX = 0.3;
 const ZOOM_SHOW_CAPITAL_DOTS = 1.5;
 const ZOOM_SHOW_CAPITAL_LABELS = 4;
 const ZOOM_SHOW_DETAIL = 2.5;
-const ZOOM_SHOW_ADMIN1_LINES = 3;
-const ZOOM_SHOW_ADMIN1_LABELS = 6;
+const ZOOM_SHOW_ADMIN1_LINES = 2.2;
+const ZOOM_SHOW_ADMIN1_LABELS = 5;
 
 const land = feature(landTopology as unknown as Topology, landTopology.objects.land as GeometryCollection);
 const countries = feature(
@@ -196,13 +196,15 @@ export function createGlobePicker(canvas: HTMLCanvasElement, options: GlobePicke
     ctx.lineWidth = 0.6;
     ctx.stroke();
 
-    // Province/state borders, once loaded and zoomed in enough to be useful.
+    // Province/state borders, once loaded and zoomed in enough to be useful. Drawn bolder and
+    // in a distinct hue from country borders since disambiguating regions matters most for
+    // picking a precise location.
     if (admin1 && zoom >= ZOOM_SHOW_ADMIN1_LINES) {
       ctx.beginPath();
-      ctx.setLineDash([2, 2]);
+      ctx.setLineDash([4, 2]);
       path(admin1);
       ctx.strokeStyle = ADMIN1_BORDER_COLOR;
-      ctx.lineWidth = 0.6;
+      ctx.lineWidth = 0.9;
       ctx.stroke();
       ctx.setLineDash([]);
 
@@ -259,6 +261,67 @@ export function createGlobePicker(canvas: HTMLCanvasElement, options: GlobePicke
   function recenterOnMarker(): void {
     rotation = [-markerLon, -markerLat, 0];
   }
+
+  // Hover overlay: shows the country (and, once zoomed in, province/state) under the cursor.
+  // Point-in-polygon lookups against the country/admin1 layers are cheap individually but add up
+  // across hundreds of features, so mousemove events are coalesced to at most one lookup per frame.
+  const hoverLabel = document.createElement('div');
+  hoverLabel.className = 'globe-hover-label';
+  canvas.parentElement?.appendChild(hoverLabel);
+
+  function hideHover(): void {
+    hoverLabel.classList.remove('visible');
+  }
+
+  function updateHover(clientX: number, clientY: number): void {
+    const rect = canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    const point = projection.invert?.([x, y]);
+    if (!point || !Number.isFinite(point[0]) || !Number.isFinite(point[1])) {
+      hideHover();
+      return;
+    }
+    const activeCountries = detail?.countries ?? countries;
+    let countryName: string | null = null;
+    for (const country of activeCountries.features) {
+      if (geoContains(country, point)) {
+        countryName = country.properties.name;
+        break;
+      }
+    }
+    if (!countryName) {
+      hideHover();
+      return;
+    }
+    let label = countryName;
+    if (admin1 && zoom >= ZOOM_SHOW_ADMIN1_LINES) {
+      for (const region of admin1.features) {
+        if (geoContains(region, point)) {
+          label = `${region.properties.name}, ${countryName}`;
+          break;
+        }
+      }
+    }
+    hoverLabel.textContent = label;
+    hoverLabel.style.left = `${canvas.offsetLeft + x}px`;
+    hoverLabel.style.top = `${canvas.offsetTop + y}px`;
+    hoverLabel.classList.add('visible');
+  }
+
+  let hoverRafId: number | null = null;
+  let pendingHoverPoint: { x: number; y: number } | null = null;
+
+  canvas.addEventListener('pointermove', (e) => {
+    if (e.pointerType !== 'mouse') return;
+    pendingHoverPoint = { x: e.clientX, y: e.clientY };
+    if (hoverRafId !== null) return;
+    hoverRafId = requestAnimationFrame(() => {
+      hoverRafId = null;
+      if (pendingHoverPoint) updateHover(pendingHoverPoint.x, pendingHoverPoint.y);
+    });
+  });
+  canvas.addEventListener('pointerleave', hideHover);
 
   attachViewportInteraction(canvas, {
     onPan: (dx, dy) => {

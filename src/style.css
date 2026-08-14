@@ -130,6 +130,7 @@ button:hover {
   display: flex;
   flex-direction: column;
   align-items: center;
+  position: relative;
 }
 
 #globe-canvas {
@@ -143,6 +144,26 @@ button:hover {
 
 #globe-canvas:active {
   cursor: grabbing;
+}
+
+.globe-hover-label {
+  position: absolute;
+  pointer-events: none;
+  transform: translate(-50%, -130%);
+  background: var(--panel-bg);
+  color: var(--text-h);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 13px;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.globe-hover-label.visible {
+  opacity: 1;
 }
 
 .time-panel {
