@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "astronomy-engine": "^2.1.19",
-    "d3-geo": "^3.1.1",
+    "d3-geo": "^3.1.2",
     "topojson-client": "^3.1.0",
     "world-atlas": "^2.0.2"
   }
